@@ -1,0 +1,135 @@
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: anime_clipper
+      POSTGRES_USER: clipper
+      POSTGRES_PASSWORD: clipper_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clipper"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Celery queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # FastAPI Backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://clipper:clipper_dev_password@db:5432/anime_clipper
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: anime-clips
+      JWT_SECRET: dev_jwt_secret_change_in_production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - video_cache:/tmp/videos
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker (Video Processing)
+  worker:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://clipper:clipper_dev_password@db:5432/anime_clipper
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: anime-clips
+    depends_on:
+      - db
+      - redis
+      - minio
+    volumes:
+      - ./backend:/app
+      - video_cache:/tmp/videos
+      - model_cache:/root/.cache/whisper
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+
+  # Celery Flower (Monitoring)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.worker
+    ports:
+      - "5555:5555"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    command: celery -A app.workers.celery_app flower --port=5555
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api
+    command: npm run dev
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  video_cache:
+  model_cache:

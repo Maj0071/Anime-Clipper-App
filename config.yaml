@@ -1,0 +1,244 @@
+# Anime Auto-Clipper Configuration
+
+# Video Analysis Settings
+analysis:
+  # Clip length constraints (seconds)
+  clip_min_s: 7
+  clip_max_s: 15
+  target_s: 10
+  
+  # How many candidates to generate per minute of input video
+  candidates_per_minute: 4
+  
+  # Maximum candidates to keep (top N by score)
+  max_candidates: 20
+  
+  # Scene detection sensitivity (0.1-1.0, higher = more scenes)
+  scene_threshold: 0.3
+  
+  # Motion detection sample rate (check every N frames)
+  motion_sample_rate: 5
+
+# Scoring Weights (must sum to ~1.0)
+scoring:
+  weights:
+    speech_hook: 0.30      # Attention-grabbing phrases at start
+    motion: 0.25           # Visual action/movement
+    audio_peak: 0.20       # Audio energy spikes
+    keyword_match: 0.15    # User-specified keywords
+    scene_freshness: 0.10  # Penalize overlapping clips
+
+# Whisper ASR Configuration
+whisper:
+  # Model size: tiny, base, small, medium, large
+  # tiny:   ~1GB RAM,  ~1x realtime CPU
+  # base:   ~1GB RAM,  ~2x realtime CPU
+  # small:  ~2GB RAM,  ~4x realtime CPU
+  # medium: ~5GB RAM,  ~8x realtime (GPU recommended)
+  # large:  ~10GB RAM, ~15x realtime (GPU required)
+  model: base
+  
+  # Language: 'auto', 'en', 'ja', 'es', etc.
+  language: auto
+  
+  # Device: 'cpu', 'cuda', 'mps' (Mac M1/M2)
+  device: cpu
+
+# Rendering Configuration
+render:
+  # Available templates
+  templates:
+    - clean      # Clean subtitles with outline
+    - manga      # Bold comic-style text
+    - impact     # Word-by-word emphasis
+    - karaoke    # Progressive highlight
+  
+  default_template: clean
+  
+  # Audio normalization
+  loudness_target: -14     # LUFS (industry standard)
+  true_peak_limit: -1      # dBTP
+  
+  # Output aspect ratios
+  output_formats:
+    - "9:16"     # TikTok, IG Reels (1080x1920)
+    - "1:1"      # IG Feed (1080x1080)
+    - "4:5"      # IG Story (1080x1350)
+  
+  # Video encoding
+  video_codec: libx264
+  video_preset: fast       # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+  video_crf: 23            # Quality: 18-28 (lower = better)
+  video_profile: high
+  video_bitrate: 10M       # Max bitrate
+  
+  # Audio encoding
+  audio_codec: aac
+  audio_bitrate: 128k
+  audio_sample_rate: 48000
+  
+  # Watermark settings
+  watermark:
+    enabled: true
+    position: top-left     # top-left, top-right, bottom-left, bottom-right
+    opacity: 0.6
+    font_size: 24
+    padding: 20
+
+# Caption Settings (per template)
+captions:
+  clean:
+    font_family: DejaVuSans-Bold.ttf
+    font_size: 48
+    font_color: white
+    border_width: 3
+    border_color: black
+    shadow_color: black@0.5
+    shadow_offset: [2, 2]
+    position: bottom       # top, center, bottom
+    safe_margin: 300       # Pixels from edge (for 9:16)
+  
+  manga:
+    font_family: DejaVuSans-Bold.ttf
+    font_size: 56
+    font_color: yellow
+    border_width: 4
+    border_color: black
+    shadow_color: black@0.8
+    shadow_offset: [3, 3]
+    zoom_effect: true      # Subtle 2-4% zoom
+    zoom_speed: 0.0005
+    position: bottom
+    safe_margin: 300
+  
+  impact:
+    font_family: DejaVuSans-Bold.ttf
+    font_size_normal: 50
+    font_size_emphasis: 60
+    font_color_normal: white
+    font_color_emphasis: red
+    border_width: 4
+    border_color: black
+    shadow_color: black@0.7
+    shadow_offset: [3, 3]
+    position: bottom
+    safe_margin: 300
+  
+  karaoke:
+    font_family: DejaVuSans-Bold.ttf
+    font_size: 48
+    font_color_base: gray
+    font_color_active: yellow
+    border_width: 3
+    border_color: black
+    shadow_color: black@0.5
+    shadow_offset: [2, 2]
+    position: bottom
+    safe_margin: 300
+
+# Hook Phrase Detection
+hooks:
+  interjections:
+    - wait
+    - hey
+    - no
+    - stop
+    - what
+    - now
+    - look
+    - watch
+  
+  questions:
+    - who
+    - what
+    - where
+    - when
+    - why
+    - how
+  
+  action_verbs:
+    - fight
+    - run
+    - attack
+    - defend
+    - believe
+    - think
+  
+  # Boost score if hook appears in first N seconds
+  hook_window_s: 2.5
+
+# S3/Storage Configuration
+storage:
+  bucket_name: anime-clips
+  
+  # Key prefixes
+  prefixes:
+    uploads: uploads/
+    thumbnails: thumbnails/
+    renders: renders/
+    temp: temp/
+  
+  # Signed URL expiration (seconds)
+  upload_url_expiry: 3600    # 1 hour
+  download_url_expiry: 86400  # 24 hours
+
+# Processing Limits
+limits:
+  # Max video duration (seconds)
+  max_video_duration: 3600   # 1 hour
+  
+  # Max file size (bytes)
+  max_file_size: 2147483648  # 2GB
+  
+  # Max concurrent renders per user
+  max_concurrent_renders: 3
+  
+  # Rate limits (requests per minute)
+  rate_limit_upload: 5
+  rate_limit_analyze: 3
+  rate_limit_render: 10
+
+# Celery Worker Configuration
+celery:
+  # Broker and result backend
+  broker_url: redis://redis:6379/0
+  result_backend: redis://redis:6379/0
+  
+  # Task routing
+  task_routes:
+    'app.workers.analyzer.*': {'queue': 'analysis'}
+    'app.workers.renderer.*': {'queue': 'rendering'}
+  
+  # Task time limits (seconds)
+  task_soft_time_limit: 3600   # 1 hour
+  task_time_limit: 3900        # 65 minutes
+  
+  # Worker settings
+  worker_prefetch_multiplier: 1
+  worker_max_tasks_per_child: 50
+
+# Logging
+logging:
+  level: INFO              # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  
+  # Log to files
+  file_enabled: true
+  file_path: logs/app.log
+  file_max_bytes: 10485760  # 10MB
+  file_backup_count: 5
+
+# Feature Flags
+features:
+  enable_face_detection: false     # Future: cluster by character
+  enable_meme_soundboard: false    # Future: auto beat-sync
+  enable_ab_testing: false         # Future: 2 hooks per scene
+  enable_direct_publish: false     # Future: TikTok/IG API integration
+  enable_llm_tags: false           # Future: auto hashtags
+
+# Development/Debug
+debug:
+  enabled: false
+  save_intermediate_files: false   # Keep temp audio/video files
+  verbose_ffmpeg: false            # Show full FFmpeg output
+  profiling: false                 # Enable performance profiling
