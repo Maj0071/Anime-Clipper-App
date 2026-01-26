@@ -52,7 +52,7 @@ def load_config():
         }
 
 
-@router.post("/renders", response_model=RenderResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=RenderResponse, status_code=status.HTTP_201_CREATED)
 async def create_render(
     request: RenderRequest,
     current_user: User = Depends(get_current_user),
@@ -166,7 +166,7 @@ async def create_render(
     }
 
 
-@router.get("/renders/{render_id}", response_model=RenderStatus)
+@router.get("/{render_id}", response_model=RenderStatus)
 async def get_render_status(
     render_id: str,
     current_user: User = Depends(get_current_user),
@@ -198,7 +198,7 @@ async def get_render_status(
     }
 
 
-@router.get("/renders", response_model=List[RenderStatus])
+@router.get("", response_model=List[RenderStatus])
 async def list_renders(
     status_filter: Optional[str] = None,
     skip: int = 0,
@@ -233,7 +233,7 @@ async def list_renders(
     ]
 
 
-@router.delete("/renders/{render_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{render_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_render(
     render_id: str,
     current_user: User = Depends(get_current_user),
@@ -268,7 +268,7 @@ async def delete_render(
     return None
 
 
-@router.post("/renders/batch", response_model=List[RenderResponse])
+@router.post("/batch", response_model=List[RenderResponse])
 async def batch_render(
     requests: List[RenderRequest],
     current_user: User = Depends(get_current_user),
@@ -316,7 +316,7 @@ async def batch_render(
     return results
 
 
-@router.get("/renders/{render_id}/download/{candidate_id}/{format}")
+@router.get("/{render_id}/download/{candidate_id}/{format}")
 async def download_render(
     render_id: str,
     candidate_id: str,

@@ -8,18 +8,26 @@ Get Anime Auto-Clipper running in 5 minutes!
 - 4GB+ free RAM
 - 10GB+ free disk space
 
-## Step 1: Clone & Setup (1 minute)
+## Step 1: Get the project & setup (1 minute)
+
+If you already have the project folder (e.g. `Anime-Clipper-App-1`), skip the clone and go into it:
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/anime-auto-clipper.git
-cd anime-auto-clipper
+cd /path/to/Anime-Clipper-App-1
+```
 
-# Make setup script executable
-chmod +x setup.sh
+Or, if you have your own Git repo:
 
-# Run setup (this does everything for you!)
-./setup.sh
+```bash
+git clone https://github.com/YOUR_USERNAME/your-repo-name.git
+cd your-repo-name
+```
+
+Then run the setup script:
+
+```bash
+chmod +x setup_script.sh
+./setup_script.sh
 ```
 
 The setup script will:

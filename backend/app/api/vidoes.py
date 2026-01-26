@@ -1,15 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
+import os
 import uuid
+import glob
 
 from app.database import get_db
-from app.models import User, Video, Candidate
+from app.models import User, Video, Candidate, Job
 from app.api.auth import get_current_user
 from app.services.s3_service import generate_signed_upload_url
 
 router = APIRouter()
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/videos/uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 class UploadInit(BaseModel):
@@ -28,6 +32,8 @@ class VideoCreate(BaseModel):
     upload_id: str
     title: Optional[str] = None
     tags: Optional[List[str]] = []
+    source: Optional[str] = "s3"  # "s3" or "local"
+    local_ext: Optional[str] = None  # e.g. ".mp4" when source=local
 
 
 class VideoResponse(BaseModel):
@@ -57,6 +63,25 @@ class CandidatesListResponse(BaseModel):
     video_id: str
     total: int
     candidates: List[CandidateResponse]
+
+
+@router.post("/upload", response_model=dict)
+async def direct_upload(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Direct file upload to disk (for LOCAL_MODE). Saves to UPLOAD_DIR and returns upload_id and ext.
+    """
+    if not file.filename or not file.content_type or not file.content_type.startswith("video/"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Valid video file required")
+    ext = os.path.splitext(file.filename or "x.mp4")[1] or ".mp4"
+    upload_id = str(uuid.uuid4())
+    path = os.path.join(UPLOAD_DIR, f"{upload_id}{ext}")
+    with open(path, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            f.write(chunk)
+    return {"upload_id": upload_id, "ext": ext}
 
 
 @router.post("/uploads/init", response_model=UploadInitResponse)
@@ -123,48 +148,56 @@ async def initialize_upload(
     }
 
 
-@router.post("/videos", response_model=VideoResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=VideoResponse, status_code=status.HTTP_201_CREATED)
 async def create_video(
     video_data: VideoCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Create video record after successful upload
-    
-    - **upload_id**: ID returned from /uploads/init
-    - **title**: Optional video title
-    - **tags**: Optional list of tags
-    
-    Creates a database record for the uploaded video
+    Create video record after successful upload.
+    - **upload_id**: From /uploads/init (S3) or /upload (local)
+    - **source**: "s3" or "local"
+    - **local_ext**: e.g. ".mp4" when source=local
     """
-    # Construct S3 URL from upload_id
-    # In production, verify the upload actually succeeded
-    s3_url = f"s3://anime-clips/uploads/{current_user.id}/{video_data.upload_id}.mp4"
-    
-    # Create video record
+    if (video_data.source or "s3") == "local":
+        ext = (video_data.local_ext or ".mp4").strip()
+        if ext and not ext.startswith("."):
+            ext = "." + ext
+        if not ext:
+            ext = ".mp4"
+        path = os.path.join(UPLOAD_DIR, f"{video_data.upload_id}{ext}")
+        if not os.path.isfile(path):
+            # try glob
+            matches = glob.glob(os.path.join(UPLOAD_DIR, f"{video_data.upload_id}.*"))
+            path = matches[0] if matches else path
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local upload file not found")
+        src_url = "file://" + os.path.abspath(path)
+    else:
+        src_url = f"s3://anime-clips/uploads/{current_user.id}/{video_data.upload_id}.mp4"
+
     new_video = Video(
         user_id=current_user.id,
         title=video_data.title or f"Video {video_data.upload_id[:8]}",
-        src_url=s3_url,
-        duration=None,  # Will be populated during analysis
-        resolution=None  # Will be populated during analysis
+        src_url=src_url,
+        duration=None,
+        resolution=None,
     )
-    
     db.add(new_video)
     db.commit()
     db.refresh(new_video)
-    
+
     return {
         "video_id": str(new_video.id),
         "title": new_video.title,
         "duration": new_video.duration,
         "resolution": new_video.resolution,
-        "created_at": new_video.created_at.isoformat()
+        "created_at": new_video.created_at.isoformat(),
     }
 
 
-@router.get("/videos/{video_id}", response_model=VideoResponse)
+@router.get("/{video_id}", response_model=VideoResponse)
 async def get_video(
     video_id: str,
     current_user: User = Depends(get_current_user),
@@ -195,7 +228,7 @@ async def get_video(
     }
 
 
-@router.get("/videos", response_model=List[VideoResponse])
+@router.get("", response_model=List[VideoResponse])
 async def list_videos(
     skip: int = 0,
     limit: int = 20,
@@ -226,7 +259,7 @@ async def list_videos(
     ]
 
 
-@router.delete("/videos/{video_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{video_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_video(
     video_id: str,
     current_user: User = Depends(get_current_user),
@@ -263,7 +296,32 @@ async def delete_video(
     return None
 
 
-@router.get("/videos/{video_id}/candidates", response_model=CandidatesListResponse)
+@router.get("/{video_id}/jobs", response_model=List[dict])
+async def get_video_jobs(
+    video_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List jobs for a video (used by analyze page for polling)."""
+    video = db.query(Video).filter(Video.id == video_id, Video.user_id == current_user.id).first()
+    if not video:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+    jobs = db.query(Job).filter(Job.video_id == video_id).order_by(Job.created_at.desc()).limit(5).all()
+    return [
+        {
+            "job_id": str(j.id),
+            "video_id": str(j.video_id),
+            "type": j.type,
+            "status": j.status,
+            "progress": j.progress,
+            "logs": j.logs or {},
+            "created_at": j.created_at.isoformat(),
+        }
+        for j in jobs
+    ]
+
+
+@router.get("/{video_id}/candidates", response_model=CandidatesListResponse)
 async def get_video_candidates(
     video_id: str,
     min_score: Optional[float] = None,

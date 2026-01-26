@@ -34,11 +34,11 @@ export default function CandidateGallery({ videoId, onSelectCandidates }: Galler
 
   const fetchCandidates = async () => {
     try {
-      const response = await fetch(`/api/videos/${videoId}/candidates`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const headers: Record<string, string> = {};
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('token')) {
+        headers['Authorization'] = `Bearer ${localStorage.getItem('token')}`;
+      }
+      const response = await fetch(`/api/videos/${videoId}/candidates`, { headers });
       
       if (!response.ok) throw new Error('Failed to fetch candidates');
       

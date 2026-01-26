@@ -5,13 +5,15 @@ from pydantic import BaseModel, EmailStr
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from typing import Optional
 import os
 
 from app.database import get_db
 from app.models import User
 
 router = APIRouter()
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
+LOCAL_MODE = os.getenv("LOCAL_MODE", "false").lower() == "true"
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -63,32 +65,50 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     return encoded_jwt
 
 
+def get_or_create_local_user(db: Session) -> User:
+    """Get or create the default local user when LOCAL_MODE is on."""
+    email = "local@local.dev"
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        return user
+    hashed = get_password_hash("local")
+    user = User(email=email, pw_hash=hashed)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
-    """Dependency to get the current authenticated user"""
+    """Dependency to get the current authenticated user. In LOCAL_MODE, falls back to default user when no/invalid token."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
-    try:
-        token = credentials.credentials
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-        token_data = TokenData(email=email)
-    except JWTError:
-        raise credentials_exception
-    
-    user = db.query(User).filter(User.email == token_data.email).first()
-    if user is None:
-        raise credentials_exception
-    
-    return user
+
+    if credentials and credentials.credentials:
+        try:
+            token = credentials.credentials
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            email: str = payload.get("sub")
+            if email is None:
+                raise credentials_exception
+            token_data = TokenData(email=email)
+            user = db.query(User).filter(User.email == token_data.email).first()
+            if user is None:
+                raise credentials_exception
+            return user
+        except JWTError:
+            if not LOCAL_MODE:
+                raise credentials_exception
+
+    if LOCAL_MODE:
+        return get_or_create_local_user(db)
+    raise credentials_exception
 
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)

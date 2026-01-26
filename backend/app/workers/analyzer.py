@@ -303,10 +303,22 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         job.progress = 0
         db.commit()
         
-        # Download video
+        # Get video file (from S3 or local)
         self.update_state(state='PROGRESS', meta={'step': 'downloading', 'progress': 5})
         video_path = f"/tmp/videos/{video_id}.mp4"
-        download_from_s3(video.src_url, video_path)
+        os.makedirs(os.path.dirname(video_path), exist_ok=True)
+        if video.src_url.startswith("file://"):
+            import shutil
+            local_src = video.src_url.replace("file://", "")
+            if os.path.isfile(local_src):
+                ext = os.path.splitext(local_src)[1].lower()
+                if ext and ext != ".mp4":
+                    video_path = f"/tmp/videos/{video_id}{ext}"
+                shutil.copy2(local_src, video_path)
+            else:
+                raise FileNotFoundError(f"Local video not found: {local_src}")
+        else:
+            download_from_s3(video.src_url, video_path)
         
         # Initialize analyzer
         analyzer = VideoAnalyzer(video_path, config)

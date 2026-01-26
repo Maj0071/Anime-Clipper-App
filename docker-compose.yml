@@ -63,6 +63,7 @@ services:
       S3_SECRET_KEY: minioadmin
       S3_BUCKET: anime-clips
       JWT_SECRET: dev_jwt_secret_change_in_production
+      LOCAL_MODE: "true"
     depends_on:
       db:
         condition: service_healthy
@@ -119,6 +120,7 @@ services:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_LOCAL_MODE: "true"
     volumes:
       - ./frontend:/app
       - /app/node_modules

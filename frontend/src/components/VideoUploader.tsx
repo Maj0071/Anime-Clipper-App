@@ -5,10 +5,21 @@ interface UploadProps {
   onUploadComplete: (videoId: string) => void;
 }
 
+export type ClipLengthPreset = '15' | '30' | '60' | 'custom';
+
+export const CLIP_PRESETS: Record<ClipLengthPreset, { label: string; target: number; min: number; max: number }> = {
+  '15': { label: '15 sec', target: 15, min: 10, max: 20 },
+  '30': { label: '30 sec', target: 30, min: 22, max: 45 },
+  '60': { label: '1 min (TikTok/Reels)', target: 60, min: 45, max: 90 },
+  custom: { label: 'Custom', target: 60, min: 30, max: 120 },
+};
+
 export default function VideoUploader({ onUploadComplete }: UploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
   const [keywords, setKeywords] = useState('');
+  const [clipPreset, setClipPreset] = useState<ClipLengthPreset>('60');
+  const [customSeconds, setCustomSeconds] = useState(60);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +57,14 @@ export default function VideoUploader({ onUploadComplete }: UploadProps) {
     }
   };
 
+  const getHeaders = (): Record<string, string> => {
+    const h: Record<string, string> = {};
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('token')) {
+      h['Authorization'] = `Bearer ${localStorage.getItem('token')}`;
+    }
+    return h;
+  };
+
   const uploadVideo = async () => {
     if (!file) return;
 
@@ -53,79 +72,89 @@ export default function VideoUploader({ onUploadComplete }: UploadProps) {
     setError(null);
     setProgress(0);
 
+    const isLocal = process.env.NEXT_PUBLIC_LOCAL_MODE === 'true';
+
     try {
-      // Step 1: Initialize upload
-      const initResponse = await fetch('/api/uploads/init', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({
-          filename: file.name,
-          filesize: file.size,
-          content_type: file.type
-        })
-      });
+      let upload_id: string;
+      let local_ext: string | undefined;
 
-      if (!initResponse.ok) throw new Error('Failed to initialize upload');
-      
-      const { upload_url, upload_id } = await initResponse.json();
+      if (isLocal) {
+        // Direct upload to backend (saved to disk)
+        setProgress(10);
+        const fd = new FormData();
+        fd.append('file', file);
+        const up = await fetch('/api/videos/upload', {
+          method: 'POST',
+          headers: getHeaders(),
+          body: fd,
+        });
+        if (!up.ok) throw new Error('Direct upload failed');
+        const d = await up.json();
+        upload_id = d.upload_id;
+        local_ext = d.ext || '.mp4';
+        setProgress(50);
+      } else {
+        // S3: init then PUT to signed URL
+        const initHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...getHeaders() };
+        const initResponse = await fetch('/api/videos/uploads/init', {
+          method: 'POST',
+          headers: initHeaders,
+          body: JSON.stringify({
+            filename: file.name,
+            filesize: file.size,
+            content_type: file.type,
+          }),
+        });
+        if (!initResponse.ok) throw new Error('Failed to initialize upload');
+        const { upload_url, upload_id: u } = await initResponse.json();
+        upload_id = u;
 
-      // Step 2: Upload to S3
-      const xhr = new XMLHttpRequest();
-      
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const percentComplete = Math.round((e.loaded / e.total) * 100);
-          setProgress(percentComplete);
-        }
-      });
+        const xhr = new XMLHttpRequest();
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable)
+            setProgress(10 + Math.round((e.loaded / e.total) * 40));
+        });
+        xhr.open('PUT', upload_url);
+        xhr.setRequestHeader('Content-Type', file.type);
+        await new Promise<void>((resolve, reject) => {
+          xhr.onload = () => (xhr.status === 200 ? resolve() : reject(new Error('Upload failed')));
+          xhr.onerror = () => reject(new Error('Upload failed'));
+          xhr.send(file);
+        });
+        setProgress(50);
+      }
 
-      xhr.open('PUT', upload_url);
-      xhr.setRequestHeader('Content-Type', file.type);
-      
-      await new Promise((resolve, reject) => {
-        xhr.onload = () => {
-          if (xhr.status === 200) resolve(xhr.response);
-          else reject(new Error('Upload failed'));
-        };
-        xhr.onerror = () => reject(new Error('Upload failed'));
-        xhr.send(file);
-      });
-
-      // Step 3: Create video record
+      // Create video record
+      const videoHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...getHeaders() };
       const videoResponse = await fetch('/api/videos', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
+        headers: videoHeaders,
         body: JSON.stringify({
           upload_id,
           title: title || file.name,
-          tags: keywords.split(',').map(k => k.trim()).filter(Boolean)
-        })
+          tags: keywords.split(',').map(k => k.trim()).filter(Boolean),
+          ...(isLocal ? { source: 'local', local_ext } : {}),
+        }),
       });
 
       if (!videoResponse.ok) throw new Error('Failed to create video record');
-      
       const { video_id } = await videoResponse.json();
 
-      // Step 4: Start analysis
+      // Start analysis with user's clip length
+      const preset = clipPreset === 'custom'
+        ? { target: customSeconds, min: Math.max(10, Math.floor(customSeconds * 0.7)), max: Math.min(180, Math.ceil(customSeconds * 1.5)) }
+        : CLIP_PRESETS[clipPreset];
+      const analysisHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...getHeaders() };
       const analysisResponse = await fetch('/api/jobs/analyze', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
+        headers: analysisHeaders,
         body: JSON.stringify({
           video_id,
           keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
           targets: {
-            clip_min_s: 7,
-            clip_max_s: 15,
-            target_s: 10
+            clip_min_s: preset.min,
+            clip_max_s: preset.max,
+            target_s: preset.target
           }
         })
       });
@@ -207,6 +236,44 @@ export default function VideoUploader({ onUploadComplete }: UploadProps) {
           <div className="mt-6 space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
+                Clip length (ideal for TikTok/Instagram)
+              </label>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {(Object.keys(CLIP_PRESETS) as ClipLengthPreset[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setClipPreset(key)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      clipPreset === key
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {CLIP_PRESETS[key].label}
+                  </button>
+                ))}
+              </div>
+              {clipPreset === 'custom' && (
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    type="number"
+                    min={15}
+                    max={180}
+                    value={customSeconds}
+                    onChange={(e) => setCustomSeconds(Math.max(15, Math.min(180, Number(e.target.value) || 60)))}
+                    className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                  />
+                  <span className="text-sm text-gray-600">seconds</span>
+                </div>
+              )}
+              <p className="text-xs text-gray-500 mt-1">
+                1 min works best for Reels and TikTok to keep viewers engaged
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
                 Video Title (Optional)
               </label>
               <input
@@ -226,11 +293,11 @@ export default function VideoUploader({ onUploadComplete }: UploadProps) {
                 type="text"
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
-                placeholder="fight, funny, romance (comma-separated)"
+                placeholder="fight, epic, action (comma-separated)"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               />
               <p className="text-xs text-gray-500 mt-1">
-                Add keywords to help identify viral moments
+                e.g. fight, epic — helps find the best action moments
               </p>
             </div>
           </div>

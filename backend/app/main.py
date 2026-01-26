@@ -1,12 +1,14 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import os
 
 from app.database import engine, get_db
 from app.models import Base
-from app.api import auth, videos, jobs, renders
+from app.api import auth, jobs
+from app.api import vidoes as videos
+from app.api import renderer as renders
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -47,7 +49,7 @@ async def health_check(db: Session = Depends(get_db)):
     """Health check endpoint"""
     try:
         # Test database connection
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         raise HTTPException(

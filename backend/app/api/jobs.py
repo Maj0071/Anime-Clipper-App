@@ -69,7 +69,7 @@ def load_config():
         }
 
 
-@router.post("/jobs/analyze", response_model=AnalyzeResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/analyze", response_model=AnalyzeResponse, status_code=status.HTTP_201_CREATED)
 async def start_analysis(
     request: AnalyzeRequest,
     current_user: User = Depends(get_current_user),
@@ -156,7 +156,7 @@ async def start_analysis(
     }
 
 
-@router.get("/jobs/{job_id}", response_model=JobStatus)
+@router.get("/{job_id}", response_model=JobStatus)
 async def get_job_status(
     job_id: str,
     current_user: User = Depends(get_current_user),
@@ -198,7 +198,7 @@ async def get_job_status(
     }
 
 
-@router.get("/jobs", response_model=List[JobStatus])
+@router.get("", response_model=List[JobStatus])
 async def list_jobs(
     video_id: Optional[str] = None,
     job_type: Optional[str] = None,
@@ -258,7 +258,7 @@ async def list_jobs(
     ]
 
 
-@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def cancel_job(
     job_id: str,
     current_user: User = Depends(get_current_user),
@@ -308,7 +308,7 @@ async def cancel_job(
     return None
 
 
-@router.post("/jobs/{job_id}/retry", response_model=AnalyzeResponse)
+@router.post("/{job_id}/retry", response_model=AnalyzeResponse)
 async def retry_job(
     job_id: str,
     current_user: User = Depends(get_current_user),

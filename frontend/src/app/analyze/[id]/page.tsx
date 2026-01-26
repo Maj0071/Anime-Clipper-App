@@ -29,29 +29,29 @@ export default function AnalyzePage({ params }: AnalyzePageProps) {
     // Poll for job status every 2 seconds
     const pollStatus = async () => {
       try {
-        const response = await fetch(`/api/videos/${params.id}/jobs`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          }
-        });
+        const headers: Record<string, string> = {};
+        if (typeof localStorage !== 'undefined' && localStorage.getItem('token')) {
+          headers['Authorization'] = `Bearer ${localStorage.getItem('token')}`;
+        }
+        const response = await fetch(`/api/videos/${params.id}/jobs`, { headers });
 
         if (!response.ok) throw new Error('Failed to fetch job status');
 
         const jobs = await response.json();
-        const latestJob = jobs[0]; // Get most recent job
+        const latestJob = Array.isArray(jobs) && jobs.length ? jobs[0] : null;
 
         setJobStatus(latestJob);
 
         // If completed, redirect to gallery
-        if (latestJob.status === 'completed') {
+        if (latestJob?.status === 'completed') {
           setTimeout(() => {
             router.push(`/gallery/${params.id}`);
           }, 2000);
         }
 
         // If failed, stop polling
-        if (latestJob.status === 'failed') {
-          setError(latestJob.logs.error || 'Analysis failed');
+        if (latestJob?.status === 'failed') {
+          setError((latestJob.logs?.error as string) || 'Analysis failed');
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
