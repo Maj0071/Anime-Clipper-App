@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import CandidateGallery from '@/components/CandidateGallery';
-import { Film, Download, Loader2, ArrowLeft, Share2, Sparkles, Type, Zap } from 'lucide-react';
+import { Film, Download, Loader2, ArrowLeft, Sparkles } from 'lucide-react';
 
 interface GalleryPageProps {
   params: { id: string };
@@ -13,17 +13,11 @@ interface GalleryPageProps {
 export default function GalleryPage({ params }: GalleryPageProps) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [template, setTemplate] = useState('clean');
   const [outputs, setOutputs] = useState<string[]>(['9:16']);
-  const [watermark, setWatermark] = useState('@myanime');
-  const [rendering, setRendering] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [renderId, setRenderId] = useState<string | null>(null);
-  const [renderStatus, setRenderStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [renderFiles, setRenderFiles] = useState<Record<string, Record<string, string>> | null>(null);
-  // Auto-editing settings
-  const [autoEdit, setAutoEdit] = useState(true);
-  const [hookText, setHookText] = useState('');
-  const [ctaText, setCtaText] = useState('Follow for more!');
   const [downloading, setDownloading] = useState<string | null>(null);
 
   const toggleOutput = (r: string) => {
@@ -40,10 +34,10 @@ export default function GalleryPage({ params }: GalleryPageProps) {
     return h;
   };
 
-  const startRender = async () => {
+  const startDownload = async () => {
     if (selectedIds.length === 0) return;
-    setRendering(true);
-    setRenderStatus(null);
+    setProcessing(true);
+    setStatus('Processing clips with auto-captions...');
     setRenderFiles(null);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json', ...getHeaders() };
@@ -52,53 +46,62 @@ export default function GalleryPage({ params }: GalleryPageProps) {
         headers,
         body: JSON.stringify({
           candidate_ids: selectedIds,
-          template,
+          template: 'clean',
           outputs: outputs.length ? outputs : ['9:16'],
-          watermark: watermark || undefined,
+          watermark: '',
           loudness: '-14',
-          captions: 'on',
-          // Auto-editing settings for TikTok/Instagram ready clips
-          auto_edit: autoEdit,
-          hook_text: hookText || undefined,
-          cta_text: ctaText || undefined,
+          captions: 'off',
+          auto_edit: true,
+          hook_text: '',  // Will use random relatable caption
+          cta_text: '',
         }),
       });
-      if (!res.ok) throw new Error('Failed to start render');
+      if (!res.ok) throw new Error('Failed to process');
       const { render_id } = await res.json();
       setRenderId(render_id);
-      setRenderStatus('Rendering clips with auto-editing for social media...');
-      // Poll for completion
+      setStatus('Adding captions and optimizing for social media...');
+      // Poll for completion then auto-download
       const poll = async () => {
         const r = await fetch(`/api/renders/${render_id}`, { headers: getHeaders() });
         if (!r.ok) return;
         const d = await r.json();
-        setRenderStatus(`Status: ${d.status}`);
         if (d.status === 'completed' && d.files) {
-          setRenderStatus('Ready to post! Your clips are optimized for TikTok & Instagram.');
+          setStatus('Done! Downloading to your Downloads folder...');
           setRenderFiles(d.files);
-          setRendering(false);
+          // Auto-download all files
+          for (const [candidateId, formats] of Object.entries(d.files as Record<string, Record<string, string>>)) {
+            for (const format of Object.keys(formats)) {
+              await downloadClip(candidateId, format, render_id);
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
+          }
+          setStatus('Downloaded! Check your Downloads folder.');
+          setProcessing(false);
           return;
         }
         if (d.status === 'failed') {
-          setRenderStatus('Render failed. Please try again.');
-          setRendering(false);
+          setStatus('Failed. Please try again.');
+          setProcessing(false);
           return;
         }
-        setTimeout(poll, 3000);
+        setTimeout(poll, 2000);
       };
       setTimeout(poll, 2000);
     } catch (e) {
-      setRenderStatus(e instanceof Error ? e.message : 'Render failed');
-      setRendering(false);
+      setStatus(e instanceof Error ? e.message : 'Failed');
+      setProcessing(false);
     }
   };
 
-  const downloadClip = async (candidateId: string, format: string) => {
+  const downloadClip = async (candidateId: string, format: string, renderIdParam?: string) => {
+    const useRenderId = renderIdParam || renderId;
+    if (!useRenderId) return;
+
     const downloadKey = `${candidateId}-${format}`;
     setDownloading(downloadKey);
     try {
       const urlFormat = format.replace(':', 'x');
-      const response = await fetch(`/api/renders/${renderId}/download/${candidateId}/${urlFormat}`, {
+      const response = await fetch(`/api/renders/${useRenderId}/download/${candidateId}/${urlFormat}`, {
         headers: getHeaders(),
       });
       if (!response.ok) throw new Error('Download failed');
@@ -115,25 +118,9 @@ export default function GalleryPage({ params }: GalleryPageProps) {
       document.body.removeChild(a);
     } catch (e) {
       console.error('Download failed:', e);
-      alert('Download failed. Please try again.');
     } finally {
       setDownloading(null);
     }
-  };
-
-  const downloadAll = async () => {
-    if (!renderFiles || !renderId) return;
-    setDownloading('all');
-
-    // Download each file sequentially
-    for (const [candidateId, formats] of Object.entries(renderFiles)) {
-      for (const format of Object.keys(formats)) {
-        await downloadClip(candidateId, format);
-        // Small delay between downloads
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
-    setDownloading(null);
   };
 
   return (
@@ -165,191 +152,106 @@ export default function GalleryPage({ params }: GalleryPageProps) {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <CandidateGallery videoId={params.id} onSelectCandidates={setSelectedIds} />
 
-        {/* Export / Render panel */}
+        {/* Download Panel - Simple and Clean */}
         <div className="mt-10 bg-white rounded-xl shadow-lg p-6">
-          <div className="flex items-center gap-2 mb-6">
-            <Share2 className="w-6 h-6 text-purple-600" />
-            <h2 className="text-xl font-bold text-gray-900">Export for TikTok & Instagram</h2>
-            <span className="ml-2 px-2 py-1 bg-gradient-to-r from-pink-500 to-purple-500 text-white text-xs font-medium rounded-full flex items-center gap-1">
-              <Sparkles className="w-3 h-3" />
-              Auto-Edit Ready
-            </span>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-8">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Caption style</label>
-              <select
-                value={template}
-                onChange={(e) => setTemplate(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-              >
-                <option value="clean">Clean</option>
-                <option value="manga">Manga Pop</option>
-                <option value="impact">Impact Text</option>
-                <option value="karaoke">Karaoke</option>
-              </select>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-3 rounded-xl">
+              <Download className="w-6 h-6 text-white" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Aspect ratio</label>
-              <div className="flex flex-wrap gap-2">
-                {['9:16', '1:1', '4:5'].map((r) => (
-                  <label key={r} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={outputs.includes(r)}
-                      onChange={() => toggleOutput(r)}
-                      className="w-4 h-4 text-purple-600 rounded"
-                    />
-                    <span className="text-sm">{r}</span>
-                  </label>
-                ))}
-              </div>
-              <p className="text-xs text-gray-500 mt-1">9:16 = TikTok / Reels, 1:1 = IG Feed, 4:5 = IG Story</p>
+              <h2 className="text-xl font-bold text-gray-900">Download for Social Media</h2>
+              <p className="text-sm text-gray-500">Auto-adds relatable captions + optimizes for posting</p>
             </div>
           </div>
 
-          <div className="mt-6 grid md:grid-cols-2 gap-8">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Watermark</label>
-              <input
-                type="text"
-                value={watermark}
-                onChange={(e) => setWatermark(e.target.value)}
-                placeholder="@yourhandle"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-              />
-            </div>
-            <div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoEdit}
-                  onChange={(e) => setAutoEdit(e.target.checked)}
-                  className="w-4 h-4 text-purple-600 rounded"
-                />
-                <span className="text-sm font-medium text-gray-700">Auto-Edit for Social Media</span>
-              </label>
-              <p className="text-xs text-gray-500 mt-1 ml-6">Adds fade transitions, color enhancement, and audio optimization</p>
-            </div>
-          </div>
-
-          {autoEdit && (
-            <div className="mt-6 p-4 bg-purple-50 rounded-lg border border-purple-100">
-              <div className="flex items-center gap-2 mb-4">
-                <Zap className="w-5 h-5 text-purple-600" />
-                <h3 className="font-medium text-gray-900">Auto-Edit Settings</h3>
-              </div>
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                    <Type className="w-4 h-4" />
-                    Hook Text (first 2 sec)
-                  </label>
-                  <input
-                    type="text"
-                    value={hookText}
-                    onChange={(e) => setHookText(e.target.value)}
-                    placeholder="Watch this!"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Attention-grabbing text at the start</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Call-to-Action (end)</label>
-                  <input
-                    type="text"
-                    value={ctaText}
-                    onChange={(e) => setCtaText(e.target.value)}
-                    placeholder="Follow for more!"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Appears in the last 1.5 seconds</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-6 flex items-center gap-4">
-            <button
-              onClick={startRender}
-              disabled={selectedIds.length === 0 || rendering}
-              className="px-6 py-3 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {rendering ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-              {rendering ? 'Rendering…' : `Render ${selectedIds.length} clip(s)`}
-            </button>
-            {selectedIds.length === 0 && (
-              <p className="text-sm text-amber-600">Select at least one clip above.</p>
-            )}
-          </div>
-
-          {renderStatus && (
-            <div className={`mt-4 p-4 rounded-lg text-sm ${
-              renderFiles ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-blue-50 border border-blue-200 text-blue-800'
-            }`}>
-              {renderStatus}
-            </div>
-          )}
-
-          {/* Download Section */}
-          {renderFiles && Object.keys(renderFiles).length > 0 && (
-            <div className="mt-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-200">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                  <Download className="w-5 h-5 text-purple-600" />
-                  Download Your Clips
-                  <span className="text-sm font-normal text-gray-500">
-                    ({Object.values(renderFiles).reduce((acc, f) => acc + Object.keys(f).length, 0)} files)
-                  </span>
-                </h3>
-                <button
-                  onClick={downloadAll}
-                  disabled={downloading === 'all'}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-medium rounded-lg hover:from-purple-700 hover:to-pink-700 transition-colors disabled:opacity-50"
+          {/* Format Selection */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-3">Choose format:</label>
+            <div className="flex flex-wrap gap-3">
+              {[
+                { value: '9:16', label: 'TikTok / Reels', desc: 'Vertical' },
+                { value: '1:1', label: 'Instagram Feed', desc: 'Square' },
+                { value: '4:5', label: 'Instagram Story', desc: 'Portrait' },
+              ].map((format) => (
+                <label
+                  key={format.value}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg border-2 cursor-pointer transition-all ${
+                    outputs.includes(format.value)
+                      ? 'border-purple-500 bg-purple-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
                 >
-                  {downloading === 'all' ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  Download All
-                </button>
-              </div>
-              <p className="text-sm text-green-600 mb-4 flex items-center gap-2">
-                <Sparkles className="w-4 h-4" />
-                Ready to post! Clips are optimized for TikTok & Instagram with auto-editing applied.
-              </p>
-              <div className="space-y-4">
-                {Object.entries(renderFiles).map(([candidateId, formats]) => (
-                  <div key={candidateId} className="bg-white rounded-lg p-4 shadow-sm">
-                    <p className="text-sm text-gray-600 mb-3 font-medium">Clip {candidateId.slice(0, 8)}...</p>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(formats).map(([format, url]) => {
-                        const downloadKey = `${candidateId}-${format}`;
-                        const isDownloading = downloading === downloadKey;
-                        return (
-                          <button
-                            key={format}
-                            onClick={() => downloadClip(candidateId, format)}
-                            disabled={isDownloading || downloading === 'all'}
-                            className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
-                          >
-                            {isDownloading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Download className="w-4 h-4" />
-                            )}
-                            {format === '9:16' ? 'TikTok/Reels' : format === '1:1' ? 'IG Feed' : 'IG Story'}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  <input
+                    type="checkbox"
+                    checked={outputs.includes(format.value)}
+                    onChange={() => toggleOutput(format.value)}
+                    className="w-4 h-4 text-purple-600 rounded"
+                  />
+                  <div>
+                    <p className="font-medium text-gray-900">{format.label}</p>
+                    <p className="text-xs text-gray-500">{format.desc}</p>
                   </div>
-                ))}
-              </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Download Button */}
+          <button
+            onClick={startDownload}
+            disabled={selectedIds.length === 0 || processing}
+            className="w-full px-6 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold text-lg rounded-xl hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 transition-all transform hover:scale-[1.02]"
+          >
+            {processing ? (
+              <>
+                <Loader2 className="w-6 h-6 animate-spin" />
+                Processing...
+              </>
+            ) : (
+              <>
+                <Download className="w-6 h-6" />
+                Download {selectedIds.length} Clip{selectedIds.length !== 1 ? 's' : ''}
+              </>
+            )}
+          </button>
+
+          {selectedIds.length === 0 && (
+            <p className="text-center text-sm text-amber-600 mt-3">
+              Select clips above to download
+            </p>
+          )}
+
+          {/* Status */}
+          {status && (
+            <div className={`mt-4 p-4 rounded-lg text-sm flex items-center gap-2 ${
+              status.includes('Done') || status.includes('Downloaded')
+                ? 'bg-green-50 border border-green-200 text-green-800'
+                : 'bg-blue-50 border border-blue-200 text-blue-800'
+            }`}>
+              {processing && <Loader2 className="w-4 h-4 animate-spin" />}
+              {(status.includes('Done') || status.includes('Downloaded')) && <Sparkles className="w-4 h-4" />}
+              {status}
             </div>
           )}
+
+          {/* What you get */}
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <p className="text-sm font-medium text-gray-700 mb-2">Each clip includes:</p>
+            <ul className="text-sm text-gray-600 space-y-1">
+              <li className="flex items-center gap-2">
+                <span className="text-green-500">✓</span> Random relatable caption overlay
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-green-500">✓</span> Smooth fade transitions
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-green-500">✓</span> Enhanced colors for social media
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-green-500">✓</span> Optimized audio levels
+              </li>
+            </ul>
+          </div>
         </div>
       </main>
     </div>

@@ -1,6 +1,7 @@
 import os
 import subprocess
 import json
+import random
 from typing import List, Dict
 from celery import Task
 from sqlalchemy.orm import Session
@@ -11,6 +12,46 @@ from app.models import Render, Candidate, Video, Transcript
 from app.services.s3_service import download_from_s3, upload_to_s3
 
 
+# Relatable captions that resonate with people worldwide
+RELATABLE_CAPTIONS = [
+    "When you finally understand...",
+    "This hit different",
+    "No one talks about this",
+    "POV: You realized too late",
+    "Why is this so accurate",
+    "The moment everything changed",
+    "When it all makes sense",
+    "This is the sign you needed",
+    "Some things never change",
+    "Real ones understand",
+    "That feeling when...",
+    "We've all been here",
+    "Story of my life",
+    "When you least expect it",
+    "The truth nobody tells you",
+    "This hits home",
+    "Caught in 4K",
+    "Main character moment",
+    "Plot twist incoming",
+    "When the beat drops",
+    "Energy check",
+    "Mood forever",
+    "Living rent free in my head",
+    "This changed everything",
+    "Unexpected but perfect",
+    "The comeback is always stronger",
+    "Built different",
+    "Trust the process",
+    "Vibes only",
+    "When you know, you know",
+]
+
+
+def get_random_caption() -> str:
+    """Get a random relatable caption"""
+    return random.choice(RELATABLE_CAPTIONS)
+
+
 class TemplateRenderer:
     """Handles different caption templates and styling for TikTok/Instagram ready clips"""
 
@@ -18,13 +59,14 @@ class TemplateRenderer:
         self.video_path = video_path
         self.output_path = output_path
         self.config = config
-        self.watermark = config.get('watermark', '@myanime')
+        self.watermark = config.get('watermark', '')
         self.loudness = config.get('loudness', '-14')
         # Auto-editing settings for social media
         self.auto_edit = config.get('auto_edit', True)
         self.fade_duration = config.get('fade_duration', 0.3)
-        self.hook_text = config.get('hook_text', '')
-        self.cta_text = config.get('cta_text', 'Follow for more!')
+        # Use random relatable caption if not provided
+        self.hook_text = config.get('hook_text', '') or get_random_caption()
+        self.cta_text = config.get('cta_text', '')
     
     def build_ffmpeg_command(
         self,
@@ -73,29 +115,29 @@ class TemplateRenderer:
             # Add subtle color enhancement for social media pop
             filters[-1] += ',eq=saturation=1.1:contrast=1.05'
 
-        # 4. Add hook text overlay at the beginning (first 2 seconds) if provided
+        # 4. Add relatable caption overlay (shows for entire video, TikTok style)
         if self.hook_text:
+            # Main caption at top third of screen - visible throughout
             hook_filter = (
                 f"drawtext=text='{self._escape_text(self.hook_text)}':"
                 f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
-                f"fontsize=64:fontcolor=white:"
+                f"fontsize=56:fontcolor=white:"
                 f"borderw=4:bordercolor=black:"
-                f"x=(w-text_w)/2:y=(h-text_h)/3:"
-                f"shadowcolor=black@0.8:shadowx=3:shadowy=3:"
-                f"enable='between(t,0,2)'"
+                f"x=(w-text_w)/2:y=h*0.15:"
+                f"shadowcolor=black@0.9:shadowx=3:shadowy=3"
             )
             filters[-1] += f',{hook_filter}'
 
-        # 5. Add CTA overlay at the end (last 1.5 seconds)
-        if self.cta_text and self.auto_edit:
+        # 5. Add CTA overlay at the end (last 2 seconds) if provided
+        if self.cta_text:
             cta_filter = (
                 f"drawtext=text='{self._escape_text(self.cta_text)}':"
                 f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
                 f"fontsize=40:fontcolor=yellow:"
                 f"borderw=3:bordercolor=black:"
-                f"x=(w-text_w)/2:y=h-150:"
+                f"x=(w-text_w)/2:y=h-200:"
                 f"shadowcolor=black@0.7:shadowx=2:shadowy=2:"
-                f"enable='between(t,{duration - 1.5},{duration})'"
+                f"enable='between(t,{max(0, duration - 2)},{duration})'"
             )
             filters[-1] += f',{cta_filter}'
 
