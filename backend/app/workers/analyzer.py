@@ -384,38 +384,41 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
             self.update_state(state='PROGRESS', meta={'step': 'analyzing_audio', 'progress': 70})
             audio_scores = analyzer.compute_audio_peaks(audio_path)
         
-        # Generate candidates
+        # Generate candidates - action-packed viral clips
         self.update_state(state='PROGRESS', meta={'step': 'generating_candidates', 'progress': 80})
         min_duration = config.get('clip_min_s', 7)
         max_duration = config.get('clip_max_s', 15)
         target_duration = config.get('target_s', 10)
         keywords = config.get('keywords', [])
-        weights = config.get('weights', {})
-        
+        weights = config.get('weights', {
+            'speech_hook': 0.15,
+            'motion': 0.45,        # Heavy weight on motion for action
+            'audio_peak': 0.25,    # Audio peaks = impacts/explosions
+            'keyword_match': 0.10,
+            'scene_freshness': 0.05
+        })
+
         candidates = []
         existing_segments = []
-        
-        # Generate candidates around scene boundaries and speech onsets
+
+        # --- Strategy 1: Scene-boundary clips (original) ---
         for i in range(len(scene_boundaries) - 1):
             scene_start = scene_boundaries[i]
             scene_end = scene_boundaries[i + 1]
-            
-            # Try different clip lengths around this scene
+
             for duration in [target_duration, min_duration, max_duration]:
                 if scene_end - scene_start < duration:
                     continue
-                
-                # Clip starting at scene boundary
+
                 start_s = scene_start
                 end_s = min(start_s + duration, scene_end, analyzer.duration)
-                
+
                 if end_s - start_s >= min_duration:
                     score, features = score_candidate(
                         start_s, end_s, transcript_data['words'],
                         motion_scores, audio_scores, keywords,
                         existing_segments, weights
                     )
-                    
                     candidates.append({
                         'start_s': start_s,
                         'end_s': end_s,
@@ -423,7 +426,46 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
                         'features': features
                     })
                     existing_segments.append((start_s, end_s))
-        
+
+        # --- Strategy 2: Peak-action sliding window ---
+        # Scan with a sliding window to find the most action-packed segments
+        window_sizes = [8, 12, 15]  # Different clip lengths
+        step = 2  # seconds
+
+        for win_size in window_sizes:
+            for start in np.arange(0, max(0, analyzer.duration - win_size), step):
+                start_s = float(start)
+                end_s = min(start_s + win_size, analyzer.duration)
+
+                if end_s - start_s < min_duration:
+                    continue
+
+                # Check if too much overlap with existing candidates
+                too_close = False
+                for ex_start, ex_end in existing_segments:
+                    overlap = min(end_s, ex_end) - max(start_s, ex_start)
+                    if overlap > (end_s - start_s) * 0.5:
+                        too_close = True
+                        break
+                if too_close:
+                    continue
+
+                score, features = score_candidate(
+                    start_s, end_s, transcript_data['words'],
+                    motion_scores, audio_scores, keywords,
+                    existing_segments, weights
+                )
+
+                # Only keep high-action clips (motion > 0.4 or audio > 0.4)
+                if features['motion'] > 0.4 or features['audio_peak'] > 0.4:
+                    candidates.append({
+                        'start_s': start_s,
+                        'end_s': end_s,
+                        'score': score,
+                        'features': features
+                    })
+                    existing_segments.append((start_s, end_s))
+
         # Sort by score and keep top candidates
         candidates.sort(key=lambda x: x['score'], reverse=True)
         top_candidates = candidates[:config.get('max_candidates', 20)]

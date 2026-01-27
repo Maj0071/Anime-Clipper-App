@@ -354,85 +354,371 @@ class TemplateRenderer:
     ):
         """Execute FFmpeg render"""
         cmd = self.build_ffmpeg_command(start_s, end_s, captions, template, aspect)
-        
+
         # Run FFmpeg
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True
         )
-        
+
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {result.stderr}")
-        
+
         return self.output_path
+
+    def render_viral(
+        self,
+        segments: List[Dict],
+        template: str,
+        aspect: str
+    ):
+        """
+        Render a viral clip by cutting filler and stitching only
+        the action-packed segments together with fast cuts.
+
+        segments: list of {'start_s': float, 'end_s': float} for high-action parts
+        """
+        if not segments:
+            return None
+
+        # Get dimensions
+        if aspect == '9:16':
+            width, height = 1080, 1920
+        elif aspect == '1:1':
+            width, height = 1080, 1080
+        else:
+            width, height = 1080, 1350
+
+        # Render each segment to a temp file, then concat them
+        temp_dir = os.path.dirname(self.output_path)
+        segment_files = []
+
+        for i, seg in enumerate(segments):
+            seg_path = os.path.join(temp_dir, f"_seg_{i}_{os.path.basename(self.output_path)}")
+            duration = seg['end_s'] - seg['start_s']
+
+            cmd = [
+                'ffmpeg', '-ss', str(seg['start_s']), '-i', self.video_path,
+                '-t', str(duration),
+                '-filter_complex',
+                f'[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,'
+                f'crop={width}:{height},'
+                f'fade=t=in:st=0:d=0.15,fade=t=out:st={max(0, duration - 0.15)}:d=0.15,'
+                f'eq=saturation=1.15:contrast=1.08'
+                f'[v];'
+                f'[0:a]loudnorm=I={self.loudness}:TP=-1:LRA=11,'
+                f'afade=t=in:st=0:d=0.1,'
+                f'afade=t=out:st={max(0, duration - 0.1)}:d=0.1'
+                f'[a]',
+                '-map', '[v]', '-map', '[a]',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-y', seg_path
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"Segment {i} FFmpeg failed: {result.stderr[:300]}")
+            segment_files.append(seg_path)
+
+        if len(segment_files) == 1:
+            # Only one segment - just add the caption overlay
+            self._add_caption_overlay(segment_files[0], self.output_path, width, height)
+            os.remove(segment_files[0])
+            return self.output_path
+
+        # Create concat list file
+        concat_list_path = os.path.join(temp_dir, f"_concat_{os.path.basename(self.output_path)}.txt")
+        with open(concat_list_path, 'w') as f:
+            for seg_file in segment_files:
+                f.write(f"file '{seg_file}'\n")
+
+        # Concat all segments
+        concat_output = os.path.join(temp_dir, f"_concat_{os.path.basename(self.output_path)}")
+        cmd = [
+            'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_list_path,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-y', concat_output
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Concat FFmpeg failed: {result.stderr[:300]}")
+
+        # Add caption overlay to final video
+        self._add_caption_overlay(concat_output, self.output_path, width, height)
+
+        # Cleanup temp files
+        for seg_file in segment_files:
+            if os.path.exists(seg_file):
+                os.remove(seg_file)
+        if os.path.exists(concat_list_path):
+            os.remove(concat_list_path)
+        if os.path.exists(concat_output):
+            os.remove(concat_output)
+
+        return self.output_path
+
+    def _add_caption_overlay(self, input_path: str, output_path: str, width: int, height: int):
+        """Add the relatable caption text on top of a rendered video"""
+        # Get duration of input
+        probe_cmd = [
+            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            '-show_format', input_path
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        try:
+            duration = float(json.loads(probe_result.stdout)['format']['duration'])
+        except (KeyError, ValueError):
+            duration = 15.0
+
+        filters = []
+
+        # Caption text overlay
+        if self.hook_text:
+            caption_filter = (
+                f"drawtext=text='{self._escape_text(self.hook_text)}':"
+                f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                f"fontsize=56:fontcolor=white:"
+                f"borderw=4:bordercolor=black:"
+                f"x=(w-text_w)/2:y=h*0.15:"
+                f"shadowcolor=black@0.9:shadowx=3:shadowy=3"
+            )
+            filters.append(caption_filter)
+
+        # Watermark if set
+        if self.watermark:
+            wm_filter = (
+                f"drawtext=text='{self._escape_text(self.watermark)}':"
+                f"fontsize=28:fontcolor=white@0.8:"
+                f"x=20:y=120:shadowcolor=black@0.6:shadowx=2:shadowy=2"
+            )
+            filters.append(wm_filter)
+
+        if not filters:
+            # No overlays needed - just copy
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return
+
+        filter_str = ','.join(filters)
+        cmd = [
+            'ffmpeg', '-i', input_path,
+            '-vf', filter_str,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-c:a', 'copy',
+            '-movflags', '+faststart',
+            '-y', output_path
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Caption overlay FFmpeg failed: {result.stderr[:300]}")
+
+
+def _find_action_segments(video_path: str, start_s: float, end_s: float) -> List[Dict]:
+    """
+    Analyze a clip and find the high-action sub-segments.
+    Uses frame differencing to detect motion intensity.
+    Returns only the action-packed parts, cutting filler.
+    """
+    import cv2
+    import numpy as np
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return [{'start_s': start_s, 'end_s': end_s}]
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 24
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Jump to the start of the clip
+    start_frame = int(start_s * fps)
+    end_frame = int(end_s * fps)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    # Compute motion score per second
+    motion_per_second = []
+    prev_gray = None
+    frame_idx = start_frame
+    current_second_diffs = []
+    current_second = int(start_s)
+
+    sample_rate = max(1, int(fps / 8))  # Sample ~8 frames per second
+
+    while frame_idx < end_frame:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if (frame_idx - start_frame) % sample_rate == 0:
+            gray = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
+            if prev_gray is not None:
+                diff = cv2.absdiff(gray, prev_gray)
+                motion = float(np.mean(diff))
+
+                second = int(frame_idx / fps)
+                if second > current_second and current_second_diffs:
+                    motion_per_second.append({
+                        'second': current_second,
+                        'motion': np.mean(current_second_diffs)
+                    })
+                    current_second_diffs = []
+                    current_second = second
+
+                current_second_diffs.append(motion)
+            prev_gray = gray
+
+        frame_idx += 1
+
+    # Final second
+    if current_second_diffs:
+        motion_per_second.append({
+            'second': current_second,
+            'motion': np.mean(current_second_diffs)
+        })
+
+    cap.release()
+
+    if not motion_per_second:
+        return [{'start_s': start_s, 'end_s': end_s}]
+
+    # Normalize motion scores
+    max_motion = max(m['motion'] for m in motion_per_second)
+    if max_motion > 0:
+        for m in motion_per_second:
+            m['motion'] /= max_motion
+
+    # Find action-packed segments (motion > 0.3 = action)
+    ACTION_THRESHOLD = 0.3
+    MIN_SEGMENT_DURATION = 1.5  # Minimum segment length in seconds
+
+    segments = []
+    current_seg_start = None
+
+    for m in motion_per_second:
+        if m['motion'] >= ACTION_THRESHOLD:
+            if current_seg_start is None:
+                current_seg_start = float(m['second'])
+        else:
+            if current_seg_start is not None:
+                seg_end = float(m['second'])
+                if seg_end - current_seg_start >= MIN_SEGMENT_DURATION:
+                    segments.append({
+                        'start_s': current_seg_start,
+                        'end_s': seg_end
+                    })
+                current_seg_start = None
+
+    # Close last segment
+    if current_seg_start is not None:
+        seg_end = float(motion_per_second[-1]['second'] + 1)
+        if seg_end - current_seg_start >= MIN_SEGMENT_DURATION:
+            segments.append({
+                'start_s': current_seg_start,
+                'end_s': min(seg_end, end_s)
+            })
+
+    # If we found good action segments, return them
+    # Otherwise fall back to the full clip
+    if segments:
+        total_action = sum(s['end_s'] - s['start_s'] for s in segments)
+        total_clip = end_s - start_s
+        # Only use viral mode if we're cutting at least 15% of filler
+        if total_action < total_clip * 0.85:
+            return segments
+
+    # Not enough filler to cut - use full clip as one segment
+    return [{'start_s': start_s, 'end_s': end_s}]
 
 
 @celery_app.task(bind=True)
 def render_clips_task(self: Task, render_id: str, params: Dict):
     """
-    Render task:
-    1. Download source video
-    2. Get candidate details and transcripts
-    3. For each candidate + aspect ratio:
-       - Apply template
-       - Add captions from Whisper timestamps
-       - Normalize audio
-       - Add watermark
-    4. Upload rendered files to S3
-    5. Update render record
+    Render task - produces download-ready clips with auto-editing.
+    Handles both local file:// and S3 source videos.
+    Keeps rendered files on local disk for direct download.
     """
+    import shutil
+    import glob as glob_mod
+
     db = SessionLocal()
-    
+    RENDER_DIR = "/tmp/videos/renders"
+    os.makedirs(RENDER_DIR, exist_ok=True)
+
     try:
         render = db.query(Render).filter(Render.id == render_id).first()
         if not render:
             raise ValueError("Render not found")
-        
+
         render.status = 'processing'
         db.commit()
-        
+
         # Extract parameters
         candidate_ids = params['candidate_ids']
         template = params.get('template', 'clean')
         outputs = params.get('outputs', ['9:16'])
         config = {
-            'watermark': params.get('watermark', '@myanime'),
+            'watermark': params.get('watermark', ''),
             'loudness': params.get('loudness', '-14'),
-            'captions': params.get('captions', 'on'),
-            # Auto-editing settings for TikTok/Instagram ready clips
+            'captions': params.get('captions', 'off'),
             'auto_edit': params.get('auto_edit', True),
             'fade_duration': params.get('fade_duration', 0.3),
             'hook_text': params.get('hook_text', ''),
-            'cta_text': params.get('cta_text', 'Follow for more!')
+            'cta_text': params.get('cta_text', '')
         }
-        
+
         rendered_files = {}
         total_renders = len(candidate_ids) * len(outputs)
         current = 0
-        
+
         for cand_id in candidate_ids:
             candidate = db.query(Candidate).filter(Candidate.id == cand_id).first()
             if not candidate:
                 continue
-            
+
             video = db.query(Video).filter(Video.id == candidate.video_id).first()
             transcript = db.query(Transcript).filter(
                 Transcript.video_id == candidate.video_id
             ).first()
-            
-            # Download video
-            video_path = f"/tmp/videos/{video.id}.mp4"
-            if not os.path.exists(video_path):
-                download_from_s3(video.src_url, video_path)
-            
+
+            # Resolve video path - handle local file:// and S3
+            video_path = None
+            if video.src_url.startswith("file://"):
+                local_src = video.src_url.replace("file://", "")
+                if os.path.isfile(local_src):
+                    video_path = local_src
+                else:
+                    # Try finding by video ID in /tmp/videos
+                    matches = glob_mod.glob(f"/tmp/videos/{video.id}.*")
+                    if matches:
+                        video_path = matches[0]
+            else:
+                # S3 source - download locally
+                video_path = f"/tmp/videos/{video.id}.mp4"
+                if not os.path.exists(video_path):
+                    download_from_s3(video.src_url, video_path)
+
+            if not video_path or not os.path.exists(video_path):
+                raise FileNotFoundError(f"Source video not found for {video.id}")
+
             # Get captions for this segment
             captions = []
             if config['captions'] == 'on' and transcript:
                 for word in transcript.words:
                     if candidate.start_s <= word['start'] <= candidate.end_s:
                         captions.append(word)
-            
+
+            # Detect high-action sub-segments within this clip
+            action_segments = _find_action_segments(
+                video_path, candidate.start_s, candidate.end_s
+            )
+
             # Render each aspect ratio
             for aspect in outputs:
                 current += 1
@@ -441,39 +727,37 @@ def render_clips_task(self: Task, render_id: str, params: Dict):
                     state='PROGRESS',
                     meta={'step': f'rendering_{aspect}', 'progress': progress}
                 )
-                
+
                 output_filename = f"{cand_id}_{aspect.replace(':', 'x')}.mp4"
-                output_path = f"/tmp/videos/{output_filename}"
-                
-                # Render
+                output_path = os.path.join(RENDER_DIR, output_filename)
+
                 renderer = TemplateRenderer(video_path, output_path, config)
-                renderer.render(
-                    candidate.start_s,
-                    candidate.end_s,
-                    captions,
-                    template,
-                    aspect
-                )
-                
-                # Upload
-                s3_key = f"renders/{render_id}/{output_filename}"
-                file_url = upload_to_s3(output_path, s3_key)
-                
-                # Track output
+
+                if action_segments and len(action_segments) > 1:
+                    # Viral mode: stitch only action-packed parts
+                    renderer.render_viral(action_segments, template, aspect)
+                else:
+                    # Standard render for the full clip
+                    renderer.render(
+                        candidate.start_s,
+                        candidate.end_s,
+                        captions,
+                        template,
+                        aspect
+                    )
+
+                # Store local path for direct download
                 if cand_id not in rendered_files:
                     rendered_files[cand_id] = {}
-                rendered_files[cand_id][aspect] = file_url
-                
-                # Cleanup
-                os.remove(output_path)
-        
+                rendered_files[cand_id][aspect] = f"local://{output_path}"
+
         # Update render record
         render.status = 'completed'
         render.files = rendered_files
         db.commit()
-        
+
         return {'status': 'completed', 'files': rendered_files}
-        
+
     except Exception as e:
         render.status = 'failed'
         render.files = {'error': str(e)}
