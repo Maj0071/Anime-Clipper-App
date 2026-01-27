@@ -66,16 +66,16 @@ export default function GalleryPage({ params }: GalleryPageProps) {
         if (!r.ok) return;
         const d = await r.json();
         if (d.status === 'completed' && d.files) {
-          setStatus('Done! Downloading to your Downloads folder...');
           setRenderFiles(d.files);
-          // Auto-download all files
+          // Auto-download all files with staggered timing
+          let delay = 0;
           for (const [candidateId, formats] of Object.entries(d.files as Record<string, Record<string, string>>)) {
             for (const format of Object.keys(formats)) {
-              await downloadClip(candidateId, format, render_id);
-              await new Promise(resolve => setTimeout(resolve, 500));
+              setTimeout(() => downloadClip(candidateId, format, render_id), delay);
+              delay += 800;
             }
           }
-          setStatus('Downloaded! Check your Downloads folder.');
+          setStatus('Downloading! Check your Chrome downloads bar.');
           setProcessing(false);
           return;
         }
@@ -93,34 +93,21 @@ export default function GalleryPage({ params }: GalleryPageProps) {
     }
   };
 
-  const downloadClip = async (candidateId: string, format: string, renderIdParam?: string) => {
+  const downloadClip = (candidateId: string, format: string, renderIdParam?: string) => {
     const useRenderId = renderIdParam || renderId;
     if (!useRenderId) return;
 
-    const downloadKey = `${candidateId}-${format}`;
-    setDownloading(downloadKey);
-    try {
-      const urlFormat = format.replace(':', 'x');
-      const response = await fetch(`/api/renders/${useRenderId}/download/${candidateId}/${urlFormat}`, {
-        headers: getHeaders(),
-      });
-      if (!response.ok) throw new Error('Download failed');
-
-      // Get the blob and trigger download
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `clip_${candidateId.slice(0, 8)}_${urlFormat}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (e) {
-      console.error('Download failed:', e);
-    } finally {
-      setDownloading(null);
-    }
+    const urlFormat = format.replace(':', 'x');
+    // Use a direct <a> click with the real URL (not blob)
+    // This triggers Chrome's native download manager
+    const downloadUrl = `/api/renders/${useRenderId}/download/${candidateId}/${urlFormat}`;
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = `clip_${candidateId.slice(0, 8)}_${urlFormat}.mp4`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   return (
