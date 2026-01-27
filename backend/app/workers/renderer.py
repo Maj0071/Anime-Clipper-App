@@ -12,14 +12,19 @@ from app.services.s3_service import download_from_s3, upload_to_s3
 
 
 class TemplateRenderer:
-    """Handles different caption templates and styling"""
-    
+    """Handles different caption templates and styling for TikTok/Instagram ready clips"""
+
     def __init__(self, video_path: str, output_path: str, config: Dict):
         self.video_path = video_path
         self.output_path = output_path
         self.config = config
         self.watermark = config.get('watermark', '@myanime')
         self.loudness = config.get('loudness', '-14')
+        # Auto-editing settings for social media
+        self.auto_edit = config.get('auto_edit', True)
+        self.fade_duration = config.get('fade_duration', 0.3)
+        self.hook_text = config.get('hook_text', '')
+        self.cta_text = config.get('cta_text', 'Follow for more!')
     
     def build_ffmpeg_command(
         self,
@@ -29,83 +34,127 @@ class TemplateRenderer:
         template: str,
         aspect: str
     ) -> List[str]:
-        """Build FFmpeg command with filters for specified template"""
-        
+        """Build FFmpeg command with filters for TikTok/Instagram ready clips"""
+
         duration = end_s - start_s
-        
+
+        # Get dimensions based on aspect ratio
+        if aspect == '9:16':
+            width, height = 1080, 1920
+        elif aspect == '1:1':
+            width, height = 1080, 1080
+        else:  # 4:5
+            width, height = 1080, 1350
+
         # Base command
         cmd = [
             'ffmpeg', '-ss', str(start_s), '-i', self.video_path,
             '-t', str(duration)
         ]
-        
+
         # Build filter complex
         filters = []
-        
+
         # 1. Video scaling and cropping for aspect ratio
-        if aspect == '9:16':
-            filters.append(
-                '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,'
-                'crop=1080:1920'
-            )
-        elif aspect == '1:1':
-            filters.append(
-                '[0:v]scale=1080:1080:force_original_aspect_ratio=increase,'
-                'crop=1080:1080'
-            )
-        elif aspect == '4:5':
-            filters.append(
-                '[0:v]scale=1080:1350:force_original_aspect_ratio=increase,'
-                'crop=1080:1350'
-            )
-        
+        scale_crop = f'[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}'
+        filters.append(scale_crop)
+
         # 2. Optional subtle zoom (for manga template)
         if template == 'manga':
-            filters[-1] += ',zoompan=z=\'min(zoom+0.0005,1.05)\':d=1:x=\'iw/2-(iw/zoom/2)\':y=\'ih/2-(ih/zoom/2)\':s=1080x1920'
-        
-        # 3. Add watermark
-        watermark_filter = (
-            f"drawtext=text='{self.watermark}':"
-            f"fontsize=24:fontcolor=white@0.6:"
-            f"x=20:y=20:shadowcolor=black@0.5:shadowx=2:shadowy=2"
-        )
-        filters[-1] += f',{watermark_filter}'
-        
-        # 4. Add captions based on template
+            filters[-1] += f",zoompan=z='min(zoom+0.0005,1.05)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={width}x{height}"
+
+        # 3. Auto-editing effects for social media readiness
+        if self.auto_edit:
+            # Fade in at start
+            filters[-1] += f',fade=t=in:st=0:d={self.fade_duration}'
+            # Fade out at end
+            filters[-1] += f',fade=t=out:st={duration - self.fade_duration}:d={self.fade_duration}'
+
+            # Add subtle color enhancement for social media pop
+            filters[-1] += ',eq=saturation=1.1:contrast=1.05'
+
+        # 4. Add hook text overlay at the beginning (first 2 seconds) if provided
+        if self.hook_text:
+            hook_filter = (
+                f"drawtext=text='{self._escape_text(self.hook_text)}':"
+                f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                f"fontsize=64:fontcolor=white:"
+                f"borderw=4:bordercolor=black:"
+                f"x=(w-text_w)/2:y=(h-text_h)/3:"
+                f"shadowcolor=black@0.8:shadowx=3:shadowy=3:"
+                f"enable='between(t,0,2)'"
+            )
+            filters[-1] += f',{hook_filter}'
+
+        # 5. Add CTA overlay at the end (last 1.5 seconds)
+        if self.cta_text and self.auto_edit:
+            cta_filter = (
+                f"drawtext=text='{self._escape_text(self.cta_text)}':"
+                f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                f"fontsize=40:fontcolor=yellow:"
+                f"borderw=3:bordercolor=black:"
+                f"x=(w-text_w)/2:y=h-150:"
+                f"shadowcolor=black@0.7:shadowx=2:shadowy=2:"
+                f"enable='between(t,{duration - 1.5},{duration})'"
+            )
+            filters[-1] += f',{cta_filter}'
+
+        # 6. Add watermark (positioned to avoid platform UI elements)
+        if self.watermark:
+            # Position in safe zone (avoid bottom 250px for TikTok UI, avoid top 100px for IG)
+            watermark_filter = (
+                f"drawtext=text='{self._escape_text(self.watermark)}':"
+                f"fontsize=28:fontcolor=white@0.8:"
+                f"x=20:y=120:shadowcolor=black@0.6:shadowx=2:shadowy=2"
+            )
+            filters[-1] += f',{watermark_filter}'
+
+        # 7. Add captions based on template
         caption_filter = self.build_caption_filter(captions, template, aspect, start_s)
         if caption_filter:
             filters[-1] += f',{caption_filter}'
-        
+
         filters[-1] += '[v]'
-        
-        # 5. Audio normalization
+
+        # 8. Audio processing for social media
         audio_filter = (
             f'[0:a]loudnorm=I={self.loudness}:TP=-1:LRA=11,'
-            f'aformat=sample_rates=48000[a]'
+            f'aformat=sample_rates=48000'
         )
+        if self.auto_edit:
+            # Add subtle audio fade in/out
+            audio_filter += f',afade=t=in:st=0:d={self.fade_duration}'
+            audio_filter += f',afade=t=out:st={duration - self.fade_duration}:d={self.fade_duration}'
+        audio_filter += '[a]'
         filters.append(audio_filter)
-        
+
         # Add filter complex to command
         cmd.extend(['-filter_complex', ';'.join(filters)])
-        
+
         # Map outputs
         cmd.extend(['-map', '[v]', '-map', '[a]'])
-        
-        # Encoding settings
+
+        # Encoding settings optimized for social media upload
         cmd.extend([
             '-c:v', 'libx264',
             '-preset', 'fast',
-            '-crf', '23',
+            '-crf', '18',  # Higher quality for social media
             '-profile:v', 'high',
+            '-level', '4.0',  # Compatibility with most devices
             '-pix_fmt', 'yuv420p',
-            '-movflags', '+faststart',
+            '-movflags', '+faststart',  # Faster playback start
             '-c:a', 'aac',
-            '-b:a', '128k',
+            '-b:a', '192k',  # Higher audio bitrate for music/voice
+            '-ar', '48000',
             '-y',
             self.output_path
         ])
-        
+
         return cmd
+
+    def _escape_text(self, text: str) -> str:
+        """Escape special characters for FFmpeg drawtext filter"""
+        return text.replace("'", "\\'").replace(":", "\\:").replace("\\", "\\\\")
     
     def build_caption_filter(
         self,
@@ -308,7 +357,12 @@ def render_clips_task(self: Task, render_id: str, params: Dict):
         config = {
             'watermark': params.get('watermark', '@myanime'),
             'loudness': params.get('loudness', '-14'),
-            'captions': params.get('captions', 'on')
+            'captions': params.get('captions', 'on'),
+            # Auto-editing settings for TikTok/Instagram ready clips
+            'auto_edit': params.get('auto_edit', True),
+            'fade_duration': params.get('fade_duration', 0.3),
+            'hook_text': params.get('hook_text', ''),
+            'cta_text': params.get('cta_text', 'Follow for more!')
         }
         
         rendered_files = {}

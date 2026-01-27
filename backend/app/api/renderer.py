@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import yaml
+import io
 
 from app.database import get_db
 from app.models import User, Render, Candidate, Video
 from app.api.auth import get_current_user
 from app.workers.renderer import render_clips_task
+from app.services.s3_service import s3_client, S3_BUCKET
 
 router = APIRouter()
 
@@ -19,6 +22,11 @@ class RenderRequest(BaseModel):
     watermark: Optional[str] = "@myanime"
     loudness: Optional[str] = "-14"
     captions: Optional[str] = "on"  # on, off
+    # Auto-editing settings for TikTok/Instagram ready clips
+    auto_edit: Optional[bool] = True
+    fade_duration: Optional[float] = 0.3
+    hook_text: Optional[str] = ""
+    cta_text: Optional[str] = "Follow for more!"
 
 
 class RenderResponse(BaseModel):
@@ -143,7 +151,12 @@ async def create_render(
             'outputs': request.outputs,
             'watermark': request.watermark,
             'loudness': request.loudness,
-            'captions': request.captions
+            'captions': request.captions,
+            # Auto-editing settings for TikTok/Instagram ready clips
+            'auto_edit': request.auto_edit,
+            'fade_duration': request.fade_duration,
+            'hook_text': request.hook_text,
+            'cta_text': request.cta_text
         },
         status='pending',
         files={}
@@ -325,46 +338,115 @@ async def download_render(
     db: Session = Depends(get_db)
 ):
     """
-    Get a signed download URL for a specific rendered clip
-    
+    Download a rendered clip directly to the user's device
+
     - **render_id**: Render job ID
     - **candidate_id**: Candidate clip ID
     - **format**: Aspect ratio (9x16, 1x1, 4x5)
-    
-    Returns a signed URL valid for 24 hours
+
+    Returns the video file as a downloadable attachment
     """
     render = db.query(Render).filter(
         Render.id == render_id,
         Render.user_id == current_user.id
     ).first()
-    
+
     if not render:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Render not found"
         )
-    
+
     if render.status != 'completed':
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Render not completed (status: {render.status})"
         )
-    
-    # Get file URL
+
+    # Convert format from URL format (9x16) to storage format (9:16)
+    storage_format = format.replace('x', ':')
+
+    # Get file URL from render files
     try:
-        file_url = render.files[candidate_id][format]
+        file_url = render.files[candidate_id][storage_format]
     except KeyError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File not found for candidate {candidate_id} in format {format}"
         )
-    
-    # TODO: Generate signed download URL
-    # from app.services.s3_service import generate_signed_download_url
-    # signed_url = generate_signed_download_url(file_url, expires_in=86400)
-    
+
+    # Parse S3 key from URL
+    if file_url.startswith('s3://'):
+        parts = file_url.replace('s3://', '').split('/', 1)
+        s3_key = parts[1] if len(parts) > 1 else ''
+    else:
+        s3_key = file_url
+
+    # Stream file from S3 to user
+    try:
+        response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        file_stream = response['Body']
+
+        # Generate filename for download
+        filename = f"clip_{candidate_id[:8]}_{format}.mp4"
+
+        return StreamingResponse(
+            file_stream,
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(response['ContentLength'])
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download file: {str(e)}"
+        )
+
+
+@router.get("/{render_id}/download-all")
+async def download_all_renders(
+    render_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get download URLs for all rendered clips in a job
+
+    Returns a list of download URLs for all clips and formats
+    """
+    render = db.query(Render).filter(
+        Render.id == render_id,
+        Render.user_id == current_user.id
+    ).first()
+
+    if not render:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Render not found"
+        )
+
+    if render.status != 'completed':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Render not completed (status: {render.status})"
+        )
+
+    # Build list of all download URLs
+    downloads = []
+    for candidate_id, formats in render.files.items():
+        for format_key, file_url in formats.items():
+            url_format = format_key.replace(':', 'x')
+            downloads.append({
+                "candidate_id": candidate_id,
+                "format": format_key,
+                "filename": f"clip_{candidate_id[:8]}_{url_format}.mp4",
+                "download_url": f"/api/renders/{render_id}/download/{candidate_id}/{url_format}"
+            })
+
     return {
-        "download_url": file_url,  # In production, this would be a signed URL
-        "expires_in": 86400,
-        "filename": f"clip_{candidate_id}_{format}.mp4"
+        "render_id": render_id,
+        "total_files": len(downloads),
+        "downloads": downloads
     }
