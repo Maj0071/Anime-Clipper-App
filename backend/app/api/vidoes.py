@@ -1,10 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 import os
 import uuid
 import glob
+import subprocess
+import tempfile
 
 from app.database import get_db
 from app.models import User, Video, Candidate, Job
@@ -382,3 +385,97 @@ async def get_video_candidates(
             for c in candidates
         ]
     }
+
+
+@router.get("/{video_id}/preview/{candidate_id}")
+async def preview_candidate(
+    video_id: str,
+    candidate_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Stream a preview of a candidate clip segment.
+
+    Extracts the clip segment from the source video and streams it.
+    This is for previewing before rendering.
+    """
+    # Verify video ownership
+    video = db.query(Video).filter(
+        Video.id == video_id,
+        Video.user_id == current_user.id
+    ).first()
+
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found"
+        )
+
+    # Get candidate
+    candidate = db.query(Candidate).filter(
+        Candidate.id == candidate_id,
+        Candidate.video_id == video_id
+    ).first()
+
+    if not candidate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found"
+        )
+
+    # Get source video path
+    if video.src_url.startswith("file://"):
+        video_path = video.src_url.replace("file://", "")
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Preview only available for local videos"
+        )
+
+    if not os.path.exists(video_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source video file not found"
+        )
+
+    # Create a temporary preview clip
+    preview_path = f"/tmp/videos/preview_{candidate_id}.mp4"
+    duration = candidate.end_s - candidate.start_s
+
+    # Extract clip using FFmpeg
+    cmd = [
+        'ffmpeg', '-y',
+        '-ss', str(candidate.start_s),
+        '-i', video_path,
+        '-t', str(duration),
+        '-c:v', 'libx264', '-preset', 'ultrafast',
+        '-c:a', 'aac',
+        '-movflags', '+faststart',
+        preview_path
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Preview generation timed out"
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate preview: {e.stderr.decode()[:200]}"
+        )
+
+    if not os.path.exists(preview_path):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Preview generation failed"
+        )
+
+    return FileResponse(
+        preview_path,
+        media_type="video/mp4",
+        filename=f"preview_{candidate_id}.mp4"
+    )

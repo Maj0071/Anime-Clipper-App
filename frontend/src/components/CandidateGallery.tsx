@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Download, Star, Clock, TrendingUp, Film } from 'lucide-react';
+import { Play, Download, Star, Clock, TrendingUp, Film, X, Loader2 } from 'lucide-react';
 
 interface Candidate {
   id: string;
@@ -294,6 +294,121 @@ export default function CandidateGallery({ videoId, onSelectCandidates }: Galler
           <p className="text-sm text-gray-500">Try uploading a video first</p>
         </div>
       )}
+
+      {/* Preview Modal */}
+      {previewId && (
+        <PreviewModal
+          videoId={videoId}
+          candidateId={previewId}
+          candidate={candidates.find(c => c.id === previewId)!}
+          onClose={() => setPreviewId(null)}
+          formatTime={formatTime}
+        />
+      )}
+    </div>
+  );
+}
+
+interface PreviewModalProps {
+  videoId: string;
+  candidateId: string;
+  candidate: Candidate;
+  onClose: () => void;
+  formatTime: (seconds: number) => string;
+}
+
+function PreviewModal({ videoId, candidateId, candidate, onClose, formatTime }: PreviewModalProps) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const previewUrl = `/api/videos/${videoId}/preview/${candidateId}`;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b">
+          <div>
+            <h3 className="text-lg font-bold text-gray-900">Preview Clip</h3>
+            <p className="text-sm text-gray-500">
+              {formatTime(candidate.start_s)} - {formatTime(candidate.end_s)}
+              ({formatTime(candidate.end_s - candidate.start_s)} duration)
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        {/* Video Player */}
+        <div className="relative bg-black aspect-video">
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center text-white">
+                <Loader2 className="w-12 h-12 animate-spin mx-auto mb-2" />
+                <p>Generating preview...</p>
+                <p className="text-sm text-gray-400">This may take a moment</p>
+              </div>
+            </div>
+          )}
+          {error && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center text-white">
+                <p className="text-red-400 mb-2">Failed to load preview</p>
+                <p className="text-sm text-gray-400">{error}</p>
+              </div>
+            </div>
+          )}
+          <video
+            src={previewUrl}
+            controls
+            autoPlay
+            className={`w-full h-full ${loading ? 'opacity-0' : 'opacity-100'}`}
+            onLoadedData={() => setLoading(false)}
+            onError={() => {
+              setLoading(false);
+              setError('Could not load video preview');
+            }}
+          />
+        </div>
+
+        {/* Score Info */}
+        <div className="p-4 bg-gray-50">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-lg font-semibold text-gray-900">
+              Score: {(candidate.score * 100).toFixed(0)}%
+            </span>
+          </div>
+          <div className="grid grid-cols-5 gap-2">
+            {Object.entries(candidate.features).map(([key, value]) => {
+              const labels: Record<string, string> = {
+                speech_hook: 'Hook',
+                motion: 'Motion',
+                audio_peak: 'Audio',
+                keyword_match: 'Keywords',
+                scene_freshness: 'Fresh'
+              };
+              return (
+                <div key={key} className="text-center">
+                  <div className="text-xs text-gray-500 mb-1">{labels[key]}</div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div
+                      className="bg-purple-600 h-2 rounded-full"
+                      style={{ width: `${value * 100}%` }}
+                    />
+                  </div>
+                  <div className="text-xs font-medium text-gray-700 mt-1">
+                    {(value * 100).toFixed(0)}%
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

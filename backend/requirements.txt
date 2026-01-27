@@ -10,7 +10,8 @@ psycopg2-binary==2.9.9
 
 # Authentication
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+passlib==1.7.4
+bcrypt==4.0.1
 python-dotenv==1.0.0
 
 # Celery and Redis
@@ -31,7 +32,7 @@ boto3==1.29.7
 botocore==1.32.7
 
 # Utilities
-pydantic==2.5.0
+pydantic[email]==2.5.0
 pydantic-settings==2.1.0
 requests==2.31.0
 

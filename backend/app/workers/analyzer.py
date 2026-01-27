@@ -54,9 +54,13 @@ class VideoAnalyzer:
     def transcribe_audio(self, audio_path: str) -> Dict:
         """Run Whisper ASR with word-level timestamps"""
         model = whisper.load_model(self.config.get('whisper_model', 'base'))
+        # Whisper expects None for auto-detect, not 'auto'
+        language = self.config.get('language')
+        if language == 'auto' or language == '':
+            language = None
         result = model.transcribe(
             audio_path,
-            language=self.config.get('language', None),  # None = auto-detect
+            language=language,
             word_timestamps=True
         )
         
@@ -289,6 +293,8 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
     5. Create thumbnails
     6. Store results in DB
     """
+    import os
+    TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
     db = SessionLocal()
     
     try:
@@ -322,19 +328,29 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         
         # Initialize analyzer
         analyzer = VideoAnalyzer(video_path, config)
-        
+
         # Get video info
         self.update_state(state='PROGRESS', meta={'step': 'analyzing_metadata', 'progress': 10})
         video_info = analyzer.get_video_info()
         video.duration = video_info['duration']
         video.resolution = video_info['resolution']
         db.commit()
-        
-        # Extract and transcribe audio
-        self.update_state(state='PROGRESS', meta={'step': 'transcribing', 'progress': 20})
-        audio_path = f"/tmp/videos/{video_id}.wav"
-        analyzer.extract_audio(audio_path)
-        transcript_data = analyzer.transcribe_audio(audio_path)
+
+        # TEST MODE: Skip ML-heavy Whisper transcription
+        if TEST_MODE:
+            self.update_state(state='PROGRESS', meta={'step': 'test_mode_skipping_ml', 'progress': 40})
+            transcript_data = {
+                'language': 'ja',
+                'words': [],
+                'text': 'Test mode - transcription skipped'
+            }
+            audio_path = None
+        else:
+            # Extract and transcribe audio
+            self.update_state(state='PROGRESS', meta={'step': 'transcribing', 'progress': 20})
+            audio_path = f"/tmp/videos/{video_id}.wav"
+            analyzer.extract_audio(audio_path)
+            transcript_data = analyzer.transcribe_audio(audio_path)
         
         # Store transcript
         transcript = Transcript(
@@ -345,17 +361,28 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         db.add(transcript)
         db.commit()
         
-        # Scene detection
-        self.update_state(state='PROGRESS', meta={'step': 'detecting_scenes', 'progress': 40})
-        scene_boundaries = analyzer.detect_scenes()
-        
-        # Motion analysis
-        self.update_state(state='PROGRESS', meta={'step': 'analyzing_motion', 'progress': 55})
-        motion_scores = analyzer.compute_motion_scores()
-        
-        # Audio peaks
-        self.update_state(state='PROGRESS', meta={'step': 'analyzing_audio', 'progress': 70})
-        audio_scores = analyzer.compute_audio_peaks(audio_path)
+        if TEST_MODE:
+            # Generate evenly-spaced scene boundaries for testing
+            self.update_state(state='PROGRESS', meta={'step': 'test_mode_generating', 'progress': 60})
+            duration = analyzer.duration
+            scene_boundaries = [i * 60.0 for i in range(int(duration / 60) + 2)]
+            scene_boundaries = [s for s in scene_boundaries if s <= duration]
+            if scene_boundaries[-1] != duration:
+                scene_boundaries.append(duration)
+            motion_scores = np.random.rand(int(duration))
+            audio_scores = np.random.rand(int(duration))
+        else:
+            # Scene detection
+            self.update_state(state='PROGRESS', meta={'step': 'detecting_scenes', 'progress': 40})
+            scene_boundaries = analyzer.detect_scenes()
+
+            # Motion analysis
+            self.update_state(state='PROGRESS', meta={'step': 'analyzing_motion', 'progress': 55})
+            motion_scores = analyzer.compute_motion_scores()
+
+            # Audio peaks
+            self.update_state(state='PROGRESS', meta={'step': 'analyzing_audio', 'progress': 70})
+            audio_scores = analyzer.compute_audio_peaks(audio_path)
         
         # Generate candidates
         self.update_state(state='PROGRESS', meta={'step': 'generating_candidates', 'progress': 80})
@@ -437,8 +464,10 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         db.commit()
         
         # Cleanup
-        os.remove(video_path)
-        os.remove(audio_path)
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        if audio_path and os.path.exists(audio_path):
+            os.remove(audio_path)
         
         return {'status': 'completed', 'candidates': len(top_candidates)}
         

@@ -19,6 +19,7 @@ export default function GalleryPage({ params }: GalleryPageProps) {
   const [rendering, setRendering] = useState(false);
   const [renderId, setRenderId] = useState<string | null>(null);
   const [renderStatus, setRenderStatus] = useState<string | null>(null);
+  const [renderFiles, setRenderFiles] = useState<Record<string, Record<string, string>> | null>(null);
 
   const toggleOutput = (r: string) => {
     setOutputs((prev) =>
@@ -56,19 +57,20 @@ export default function GalleryPage({ params }: GalleryPageProps) {
       const { render_id } = await res.json();
       setRenderId(render_id);
       setRenderStatus('Rendering started. This may take a few minutes.');
-      // Optional: poll for completion
+      // Poll for completion
       const poll = async () => {
         const r = await fetch(`/api/renders/${render_id}`, { headers: getHeaders() });
         if (!r.ok) return;
         const d = await r.json();
         setRenderStatus(`Status: ${d.status}`);
         if (d.status === 'completed' && d.files) {
-          setRenderStatus('Ready! Download links are in the API (see /renders/{id}).');
+          setRenderStatus('Render complete! Your clips are ready to download.');
+          setRenderFiles(d.files);
           setRendering(false);
           return;
         }
         if (d.status === 'failed') {
-          setRenderStatus('Render failed.');
+          setRenderStatus('Render failed. Please try again.');
           setRendering(false);
           return;
         }
@@ -176,13 +178,40 @@ export default function GalleryPage({ params }: GalleryPageProps) {
           </div>
 
           {renderStatus && (
-            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+            <div className={`mt-4 p-4 rounded-lg text-sm ${
+              renderFiles ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-blue-50 border border-blue-200 text-blue-800'
+            }`}>
               {renderStatus}
-              {renderId && (
-                <p className="mt-1">
-                  Render ID: {renderId}. Use API <code className="bg-blue-100 px-1 rounded">GET /renders/{renderId}</code> for download URLs.
-                </p>
-              )}
+            </div>
+          )}
+
+          {/* Download Section */}
+          {renderFiles && Object.keys(renderFiles).length > 0 && (
+            <div className="mt-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-200">
+              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Download className="w-5 h-5 text-purple-600" />
+                Download Your Clips
+              </h3>
+              <div className="space-y-4">
+                {Object.entries(renderFiles).map(([candidateId, formats]) => (
+                  <div key={candidateId} className="bg-white rounded-lg p-4 shadow-sm">
+                    <p className="text-sm text-gray-600 mb-2">Clip {candidateId.slice(0, 8)}...</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(formats).map(([format, url]) => (
+                        <a
+                          key={format}
+                          href={`/api/renders/${renderId}/download/${candidateId}/${format.replace(':', 'x')}`}
+                          download
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors"
+                        >
+                          <Download className="w-4 h-4" />
+                          {format}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

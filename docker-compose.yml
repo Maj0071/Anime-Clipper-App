@@ -78,6 +78,7 @@ services:
 
   # Celery Worker (Video Processing)
   worker:
+    platform: linux/arm64
     build:
       context: ./backend
       dockerfile: ../docker/Dockerfile.worker
@@ -88,6 +89,7 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_BUCKET: anime-clips
+      TEST_MODE: "true"
     depends_on:
       - db
       - redis
@@ -119,7 +121,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: http://api:8000
       NEXT_PUBLIC_LOCAL_MODE: "true"
     volumes:
       - ./frontend:/app

@@ -24,11 +24,12 @@ celery_app.conf.update(
     timezone='UTC',
     enable_utc=True,
     
-    # Task routing
-    task_routes={
-        'app.workers.analyzer.*': {'queue': 'analysis'},
-        'app.workers.renderer.*': {'queue': 'rendering'}
-    },
+    # Task routing disabled for simpler local development
+    # All tasks go to default 'celery' queue
+    # task_routes={
+    #     'app.workers.analyzer.*': {'queue': 'analysis'},
+    #     'app.workers.renderer.*': {'queue': 'rendering'}
+    # },
     
     # Task execution settings
     task_track_started=True,

@@ -8,6 +8,12 @@ Get Anime Auto-Clipper running in 5 minutes!
 - 4GB+ free RAM
 - 10GB+ free disk space
 
+## Note for Apple Silicon (M1/M2/M3) Macs
+
+The ML-based video analysis (Whisper transcription) has compatibility issues with Docker on Apple Silicon due to CPU instruction emulation. The app includes a `TEST_MODE` that bypasses ML processing to allow testing the full workflow. To enable full ML processing, you would need to:
+1. Run the worker natively (outside Docker) with Python 3.10-3.11
+2. Or use a cloud-based ML service
+
 ## Step 1: Get the project & setup (1 minute)
 
 If you already have the project folder (e.g. `Anime-Clipper-App-1`), skip the clone and go into it:
