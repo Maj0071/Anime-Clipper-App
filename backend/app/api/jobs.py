@@ -3,11 +3,55 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import yaml
+import threading
+import logging
 
 from app.database import get_db
 from app.models import User, Video, Job
 from app.api.auth import get_current_user
 from app.workers.analyzer import analyze_video_task
+
+logger = logging.getLogger(__name__)
+
+
+class _FakeTask:
+    """Stub that replaces Celery Task `self` when running outside Celery."""
+    def update_state(self, **kwargs):
+        pass
+
+
+def _run_analysis_in_thread(job_id: str, video_id: str, config: dict):
+    """Run analyze_video_task in a background thread when Celery/Redis is unavailable."""
+    from app.workers.analyzer import analyze_video_task as task_func
+
+    def _target():
+        try:
+            # Get the original function and call it with a fake self
+            # Celery wraps the function - .run is the unbound original
+            func = task_func.run
+            # run() is the raw function with (self, job_id, ...) signature
+            # but Celery's .run doesn't pass self, so call directly
+            func(job_id=job_id, video_id=video_id, config=config)
+        except TypeError:
+            # If run() expects self, pass a fake task
+            func(_FakeTask(), job_id=job_id, video_id=video_id, config=config)
+        except Exception as e:
+            logger.error(f"Background analysis failed: {e}", exc_info=True)
+            # Mark job as failed so the UI doesn't spin forever
+            from app.database import SessionLocal
+            from app.models import Job
+            db = SessionLocal()
+            try:
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job:
+                    job.status = 'failed'
+                    job.logs = {'error': str(e)}
+                    db.commit()
+            finally:
+                db.close()
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
 
 router = APIRouter()
 
@@ -141,13 +185,17 @@ async def start_analysis(
     db.commit()
     db.refresh(job)
     
-    # Start async task
-    analyze_video_task.delay(
-        job_id=str(job.id),
-        video_id=request.video_id,
-        config=analysis_config
-    )
-    
+    # Start async task - try Celery first, fall back to thread
+    try:
+        analyze_video_task.delay(
+            job_id=str(job.id),
+            video_id=request.video_id,
+            config=analysis_config
+        )
+    except Exception as e:
+        logger.warning(f"Celery unavailable ({e}), running analysis in background thread")
+        _run_analysis_in_thread(str(job.id), request.video_id, analysis_config)
+
     return {
         "job_id": str(job.id),
         "video_id": request.video_id,

@@ -5,13 +5,42 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional
 import yaml
 import os
+import threading
+import logging
 
 from app.database import get_db
 from app.models import User, Render, Candidate, Video
 from app.api.auth import get_current_user
 from app.workers.renderer import render_clips_task
+from app.workers.auto_editor import auto_edit_task
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _run_task_in_thread(task_func, task_name: str, **kwargs):
+    """Run a Celery task in a background thread when Redis is unavailable."""
+    def _target():
+        try:
+            task_func.run(**kwargs)
+        except Exception as e:
+            logger.error(f"Background {task_name} failed: {e}", exc_info=True)
+            from app.database import SessionLocal
+            from app.models import Render
+            render_id = kwargs.get('render_id')
+            if render_id:
+                db = SessionLocal()
+                try:
+                    render = db.query(Render).filter(Render.id == render_id).first()
+                    if render and render.status != 'completed':
+                        render.status = 'failed'
+                        render.files = {'error': str(e)}
+                        db.commit()
+                finally:
+                    db.close()
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
 
 
 class RenderRequest(BaseModel):
@@ -26,6 +55,14 @@ class RenderRequest(BaseModel):
     fade_duration: Optional[float] = 0.3
     hook_text: Optional[str] = ""
     cta_text: Optional[str] = "Follow for more!"
+
+
+class AutoEditRequest(BaseModel):
+    candidate_ids: List[str]
+    auto_edit_template: str  # anime_hype | clean_flow | hard_cuts | cinematic | glitch
+    outputs: List[str] = ["9:16"]
+    max_duration: int = 30  # 5-60 seconds
+    loudness: str = "-14"
 
 
 class RenderResponse(BaseModel):
@@ -165,16 +202,128 @@ async def create_render(
     db.commit()
     db.refresh(render)
     
-    # Start async render task
-    render_clips_task.delay(
-        render_id=str(render.id),
-        params=render.params
-    )
+    # Start async render task - try Celery, fall back to thread
+    try:
+        render_clips_task.delay(
+            render_id=str(render.id),
+            params=render.params
+        )
+    except Exception as e:
+        logger.warning(f"Celery unavailable ({e}), running render in background thread")
+        _run_task_in_thread(render_clips_task, "render",
+            render_id=str(render.id), params=render.params)
     
     return {
         "render_id": str(render.id),
         "status": "pending",
         "message": f"Render job started for {len(request.candidate_ids)} clips"
+    }
+
+
+@router.post("/auto-edit", response_model=RenderResponse, status_code=status.HTTP_201_CREATED)
+async def create_auto_edit(
+    request: AutoEditRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create an auto-edit render job using a trending template.
+
+    Templates: anime_hype, clean_flow, hard_cuts, cinematic, glitch
+    """
+    valid_templates = ['anime_hype', 'clean_flow', 'hard_cuts', 'cinematic', 'glitch']
+    if request.auto_edit_template not in valid_templates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid template. Must be one of: {', '.join(valid_templates)}"
+        )
+
+    if not request.candidate_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one candidate must be selected"
+        )
+
+    if request.max_duration < 5 or request.max_duration > 60:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="max_duration must be between 5 and 60 seconds"
+        )
+
+    valid_outputs = ['9:16', '1:1', '4:5']
+    for output in request.outputs:
+        if output not in valid_outputs:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid output format. Must be one of: {', '.join(valid_outputs)}"
+            )
+
+    # Verify candidates exist and belong to user
+    candidates = db.query(Candidate).filter(
+        Candidate.id.in_(request.candidate_ids)
+    ).all()
+
+    if len(candidates) != len(request.candidate_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more candidates not found"
+        )
+
+    for candidate in candidates:
+        video = db.query(Video).filter(
+            Video.id == candidate.video_id,
+            Video.user_id == current_user.id
+        ).first()
+        if not video:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied for candidate {candidate.id}"
+            )
+
+    # Check concurrent render limit
+    active_renders = db.query(Render).filter(
+        Render.user_id == current_user.id,
+        Render.status.in_(['pending', 'processing'])
+    ).count()
+
+    MAX_CONCURRENT = 3
+    if active_renders >= MAX_CONCURRENT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Maximum {MAX_CONCURRENT} concurrent renders allowed"
+        )
+
+    render = Render(
+        user_id=current_user.id,
+        params={
+            'candidate_ids': request.candidate_ids,
+            'auto_edit_template': request.auto_edit_template,
+            'outputs': request.outputs,
+            'max_duration': request.max_duration,
+            'loudness': request.loudness,
+        },
+        status='pending',
+        files={}
+    )
+
+    db.add(render)
+    db.commit()
+    db.refresh(render)
+
+    try:
+        auto_edit_task.delay(
+            render_id=str(render.id),
+            params=render.params
+        )
+    except Exception as e:
+        logger.warning(f"Celery unavailable ({e}), running auto-edit in background thread")
+        _run_task_in_thread(auto_edit_task, "auto-edit",
+            render_id=str(render.id), params=render.params)
+
+    return {
+        "render_id": str(render.id),
+        "status": "pending",
+        "message": f"Auto-edit job started ({request.auto_edit_template}) for {len(request.candidate_ids)} clips"
     }
 
 

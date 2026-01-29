@@ -3,9 +3,9 @@
 # Video Analysis Settings
 analysis:
   # Clip length constraints (seconds)
-  clip_min_s: 7
-  clip_max_s: 15
-  target_s: 10
+  clip_min_s: 30
+  clip_max_s: 90
+  target_s: 60
   
   # How many candidates to generate per minute of input video
   candidates_per_minute: 4

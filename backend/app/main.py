@@ -1,5 +1,9 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import os
@@ -33,6 +37,11 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(videos.router, prefix="/videos", tags=["videos"])
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(renders.router, prefix="/renders", tags=["renders"])
+
+# Serve thumbnail and render files from /tmp/videos
+_thumb_dir = "/tmp/videos"
+os.makedirs(_thumb_dir, exist_ok=True)
+app.mount("/media", StaticFiles(directory=_thumb_dir), name="media")
 
 
 @app.get("/")

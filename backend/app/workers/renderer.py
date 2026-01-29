@@ -64,8 +64,7 @@ class TemplateRenderer:
         # Auto-editing settings for social media
         self.auto_edit = config.get('auto_edit', True)
         self.fade_duration = config.get('fade_duration', 0.3)
-        # Use random relatable caption if not provided
-        self.hook_text = config.get('hook_text', '') or get_random_caption()
+        self.hook_text = config.get('hook_text', '')
         self.cta_text = config.get('cta_text', '')
     
     def build_ffmpeg_command(
@@ -637,8 +636,16 @@ def _find_action_segments(video_path: str, start_s: float, end_s: float) -> List
     return [{'start_s': start_s, 'end_s': end_s}]
 
 
+def _safe_update_state(task_self, **kwargs):
+    try:
+        if task_self and hasattr(task_self, 'request'):
+            task_self.update_state(**kwargs)
+    except Exception:
+        pass
+
+
 @celery_app.task(bind=True)
-def render_clips_task(self: Task, render_id: str, params: Dict):
+def render_clips_task(self, render_id: str, params: Dict):
     """
     Render task - produces download-ready clips with auto-editing.
     Handles both local file:// and S3 source videos.
@@ -723,7 +730,7 @@ def render_clips_task(self: Task, render_id: str, params: Dict):
             for aspect in outputs:
                 current += 1
                 progress = int((current / total_renders) * 100)
-                self.update_state(
+                _safe_update_state(self,
                     state='PROGRESS',
                     meta={'step': f'rendering_{aspect}', 'progress': progress}
                 )

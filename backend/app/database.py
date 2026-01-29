@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
@@ -9,13 +9,29 @@ DATABASE_URL = os.getenv(
     "postgresql://clipper:clipper_dev_password@db:5432/anime_clipper"
 )
 
+# Fall back to SQLite for local development if PostgreSQL is unavailable
+if DATABASE_URL.startswith("postgresql://"):
+    try:
+        _test_engine = create_engine(DATABASE_URL)
+        with _test_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        _test_engine.dispose()
+    except Exception:
+        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "anime_clipper.db")
+        DATABASE_URL = f"sqlite:///{db_path}"
+        print(f"[DEV] PostgreSQL unavailable, using SQLite: {db_path}")
+
 # Create engine
+connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    connect_args["check_same_thread"] = False
+
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True,  # Enable connection health checks
-    pool_size=10,  # Connection pool size
-    max_overflow=20,  # Max overflow connections
-    echo=False  # Set to True for SQL query logging
+    pool_pre_ping=True,
+    echo=False,
+    **({} if DATABASE_URL.startswith("sqlite") else {"pool_size": 10, "max_overflow": 20}),
+    connect_args=connect_args
 )
 
 # Create session factory

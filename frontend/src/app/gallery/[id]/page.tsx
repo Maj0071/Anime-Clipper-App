@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import CandidateGallery from '@/components/CandidateGallery';
+import AutoEditStudio from '@/components/AutoEditStudio';
 import { Film, Download, Loader2, ArrowLeft, Sparkles } from 'lucide-react';
 
 interface GalleryPageProps {
@@ -37,7 +38,7 @@ export default function GalleryPage({ params }: GalleryPageProps) {
   const startDownload = async () => {
     if (selectedIds.length === 0) return;
     setProcessing(true);
-    setStatus('Processing clips with auto-captions...');
+    setStatus('Processing clips...');
     setRenderFiles(null);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json', ...getHeaders() };
@@ -52,14 +53,14 @@ export default function GalleryPage({ params }: GalleryPageProps) {
           loudness: '-14',
           captions: 'off',
           auto_edit: true,
-          hook_text: '',  // Will use random relatable caption
+          hook_text: '',
           cta_text: '',
         }),
       });
       if (!res.ok) throw new Error('Failed to process');
       const { render_id } = await res.json();
       setRenderId(render_id);
-      setStatus('Adding captions and optimizing for social media...');
+      setStatus('Rendering clean clips...');
       // Poll for completion then auto-download
       const poll = async () => {
         const r = await fetch(`/api/renders/${render_id}`, { headers: getHeaders() });
@@ -139,15 +140,18 @@ export default function GalleryPage({ params }: GalleryPageProps) {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <CandidateGallery videoId={params.id} onSelectCandidates={setSelectedIds} />
 
-        {/* Download Panel - Simple and Clean */}
+        {/* Auto-Edit Studio */}
+        <AutoEditStudio selectedCandidateIds={selectedIds} videoId={params.id} />
+
+        {/* Download Panel - Basic Download */}
         <div className="mt-10 bg-white rounded-xl shadow-lg p-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-3 rounded-xl">
               <Download className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Download for Social Media</h2>
-              <p className="text-sm text-gray-500">Auto-adds relatable captions + optimizes for posting</p>
+              <h2 className="text-xl font-bold text-gray-900">Basic Download</h2>
+              <p className="text-sm text-gray-500">Clean clips — add your own captions and edits</p>
             </div>
           </div>
 
@@ -226,7 +230,7 @@ export default function GalleryPage({ params }: GalleryPageProps) {
             <p className="text-sm font-medium text-gray-700 mb-2">Each clip includes:</p>
             <ul className="text-sm text-gray-600 space-y-1">
               <li className="flex items-center gap-2">
-                <span className="text-green-500">✓</span> Random relatable caption overlay
+                <span className="text-green-500">✓</span> Clean download — no captions
               </li>
               <li className="flex items-center gap-2">
                 <span className="text-green-500">✓</span> Smooth fade transitions

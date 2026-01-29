@@ -3,7 +3,10 @@ import subprocess
 import json
 import numpy as np
 import cv2
-import whisper
+try:
+    import whisper
+except ImportError:
+    whisper = None
 from typing import List, Dict, Tuple
 from celery import Task
 from sqlalchemy.orm import Session
@@ -282,8 +285,17 @@ def score_candidate(
     return total_score, features
 
 
+def _safe_update_state(task_self, **kwargs):
+    """Call update_state only if running inside a real Celery task."""
+    try:
+        if task_self and hasattr(task_self, 'update_state') and hasattr(task_self, 'request'):
+            task__safe_update_state(self,**kwargs)
+    except Exception:
+        pass
+
+
 @celery_app.task(bind=True)
-def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
+def analyze_video_task(self, job_id: str, video_id: str, config: Dict):
     """
     Main analysis task:
     1. Download video from S3
@@ -310,7 +322,7 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         db.commit()
         
         # Get video file (from S3 or local)
-        self.update_state(state='PROGRESS', meta={'step': 'downloading', 'progress': 5})
+        _safe_update_state(self,state='PROGRESS', meta={'step': 'downloading', 'progress': 5})
         video_path = f"/tmp/videos/{video_id}.mp4"
         os.makedirs(os.path.dirname(video_path), exist_ok=True)
         if video.src_url.startswith("file://"):
@@ -330,7 +342,7 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         analyzer = VideoAnalyzer(video_path, config)
 
         # Get video info
-        self.update_state(state='PROGRESS', meta={'step': 'analyzing_metadata', 'progress': 10})
+        _safe_update_state(self,state='PROGRESS', meta={'step': 'analyzing_metadata', 'progress': 10})
         video_info = analyzer.get_video_info()
         video.duration = video_info['duration']
         video.resolution = video_info['resolution']
@@ -338,7 +350,7 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
 
         # TEST MODE: Skip ML-heavy Whisper transcription
         if TEST_MODE:
-            self.update_state(state='PROGRESS', meta={'step': 'test_mode_skipping_ml', 'progress': 40})
+            _safe_update_state(self,state='PROGRESS', meta={'step': 'test_mode_skipping_ml', 'progress': 40})
             transcript_data = {
                 'language': 'ja',
                 'words': [],
@@ -347,7 +359,7 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
             audio_path = None
         else:
             # Extract and transcribe audio
-            self.update_state(state='PROGRESS', meta={'step': 'transcribing', 'progress': 20})
+            _safe_update_state(self,state='PROGRESS', meta={'step': 'transcribing', 'progress': 20})
             audio_path = f"/tmp/videos/{video_id}.wav"
             analyzer.extract_audio(audio_path)
             transcript_data = analyzer.transcribe_audio(audio_path)
@@ -363,7 +375,7 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         
         if TEST_MODE:
             # Generate evenly-spaced scene boundaries for testing
-            self.update_state(state='PROGRESS', meta={'step': 'test_mode_generating', 'progress': 60})
+            _safe_update_state(self,state='PROGRESS', meta={'step': 'test_mode_generating', 'progress': 60})
             duration = analyzer.duration
             scene_boundaries = [i * 60.0 for i in range(int(duration / 60) + 2)]
             scene_boundaries = [s for s in scene_boundaries if s <= duration]
@@ -373,19 +385,19 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
             audio_scores = np.random.rand(int(duration))
         else:
             # Scene detection
-            self.update_state(state='PROGRESS', meta={'step': 'detecting_scenes', 'progress': 40})
+            _safe_update_state(self,state='PROGRESS', meta={'step': 'detecting_scenes', 'progress': 40})
             scene_boundaries = analyzer.detect_scenes()
 
             # Motion analysis
-            self.update_state(state='PROGRESS', meta={'step': 'analyzing_motion', 'progress': 55})
+            _safe_update_state(self,state='PROGRESS', meta={'step': 'analyzing_motion', 'progress': 55})
             motion_scores = analyzer.compute_motion_scores()
 
             # Audio peaks
-            self.update_state(state='PROGRESS', meta={'step': 'analyzing_audio', 'progress': 70})
+            _safe_update_state(self,state='PROGRESS', meta={'step': 'analyzing_audio', 'progress': 70})
             audio_scores = analyzer.compute_audio_peaks(audio_path)
         
         # Generate candidates - action-packed viral clips
-        self.update_state(state='PROGRESS', meta={'step': 'generating_candidates', 'progress': 80})
+        _safe_update_state(self,state='PROGRESS', meta={'step': 'generating_candidates', 'progress': 80})
         min_duration = config.get('clip_min_s', 7)
         max_duration = config.get('clip_max_s', 15)
         target_duration = config.get('target_s', 10)
@@ -429,8 +441,8 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
 
         # --- Strategy 2: Peak-action sliding window ---
         # Scan with a sliding window to find the most action-packed segments
-        window_sizes = [8, 12, 15]  # Different clip lengths
-        step = 2  # seconds
+        window_sizes = [30, 45, 60, 90]  # Different clip lengths
+        step = 10  # seconds
 
         for win_size in window_sizes:
             for start in np.arange(0, max(0, analyzer.duration - win_size), step):
@@ -471,7 +483,7 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
         top_candidates = candidates[:config.get('max_candidates', 20)]
         
         # Create thumbnails and store candidates
-        self.update_state(state='PROGRESS', meta={'step': 'creating_thumbnails', 'progress': 90})
+        _safe_update_state(self,state='PROGRESS', meta={'step': 'creating_thumbnails', 'progress': 90})
         for idx, cand in enumerate(top_candidates):
             # Extract thumbnail at midpoint
             thumb_time = (cand['start_s'] + cand['end_s']) / 2
@@ -483,8 +495,13 @@ def analyze_video_task(self: Task, job_id: str, video_id: str, config: Dict):
             ]
             subprocess.run(cmd, check=True, capture_output=True)
             
-            # Upload thumbnail
-            thumb_url = upload_to_s3(thumb_path, f"thumbnails/{video_id}_{idx}.jpg")
+            # Upload thumbnail to S3, or serve locally via /media endpoint
+            try:
+                thumb_url = upload_to_s3(thumb_path, f"thumbnails/{video_id}_{idx}.jpg")
+            except Exception:
+                # Serve via FastAPI static mount at /media
+                thumb_filename = os.path.basename(thumb_path)
+                thumb_url = f"/media/{thumb_filename}"
             
             # Store candidate
             candidate = Candidate(

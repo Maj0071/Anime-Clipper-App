@@ -11,7 +11,8 @@ celery_app = Celery(
     backend=REDIS_URL,
     include=[
         'app.workers.analyzer',
-        'app.workers.renderer'
+        'app.workers.renderer',
+        'app.workers.auto_editor'
     ]
 )
 
