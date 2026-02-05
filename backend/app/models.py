@@ -107,12 +107,127 @@ class Candidate(Base):
 
 class Render(Base):
     __tablename__ = "renders"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     params = Column(JSON, nullable=False)  # candidate_ids, template, outputs, etc.
     status = Column(String(50), default='pending', index=True)
     files = Column(JSON, default={})  # Output URLs by format
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     user = relationship("User", back_populates="renders")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  LOW PRIORITY: Template Marketplace, Music Library, Thumbnails
+# ══════════════════════════════════════════════════════════════════════
+
+class EditTemplate(Base):
+    """
+    Custom editing template presets that can be saved and shared.
+
+    Stores all effect settings for a complete editing style.
+    """
+    __tablename__ = "edit_templates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)  # NULL = system template
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    category = Column(String(50), index=True)  # 'velocity', 'flow', 'cinematic', 'custom'
+
+    # Template settings (JSON blob with all effect params)
+    settings = Column(JSON, nullable=False, default={})
+    # Example settings structure:
+    # {
+    #   "base_template": "anime_hype",
+    #   "enable_beat_sync": true,
+    #   "effect_intensity": "high",
+    #   "enable_smart_reframe": true,
+    #   "caption_style": "pop",
+    #   "hook_style": "bold",
+    #   "color_grade": {...},
+    #   "transitions": {...},
+    # }
+
+    # Community features
+    is_public = Column(Integer, default=0)  # 0=private, 1=public
+    downloads = Column(Integer, default=0)
+    likes = Column(Integer, default=0)
+
+    # Preview
+    preview_url = Column(Text)  # URL to preview video/gif
+    thumbnail_url = Column(Text)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", backref="templates")
+
+
+class MusicTrack(Base):
+    """
+    Royalty-free music tracks for adding to clips.
+
+    Categorized by mood/energy for auto-matching.
+    """
+    __tablename__ = "music_tracks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # Track info
+    title = Column(String(200), nullable=False)
+    artist = Column(String(200))
+    duration = Column(Float)  # seconds
+
+    # File storage
+    file_url = Column(Text, nullable=False)  # URL to audio file
+    preview_url = Column(Text)  # Short preview clip
+
+    # Categorization for mood matching
+    mood = Column(String(50), index=True)  # 'hype', 'emotional', 'chill', 'dark', 'epic'
+    energy = Column(Integer, default=50)  # 0-100 energy level
+    genre = Column(String(50), index=True)  # 'phonk', 'electronic', 'orchestral', 'lofi', 'kpop'
+
+    # Audio analysis data (for beat sync)
+    bpm = Column(Integer)
+    beats = Column(JSON, default=[])  # Array of beat timestamps
+
+    # Usage tracking
+    uses = Column(Integer, default=0)
+
+    # License info
+    license_type = Column(String(50), default='royalty_free')
+    attribution = Column(Text)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Thumbnail(Base):
+    """
+    Generated thumbnails for clips.
+
+    Stores multiple variations with different styles.
+    """
+    __tablename__ = "thumbnails"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False, index=True)
+
+    # Frame selection
+    frame_time = Column(Float, nullable=False)  # Timestamp of extracted frame
+
+    # Style info
+    style = Column(String(50), default='default')  # 'default', 'text', 'border', 'vignette', 'neon'
+    text_overlay = Column(String(200))  # Optional text on thumbnail
+
+    # File URLs
+    image_url = Column(Text, nullable=False)
+    image_url_small = Column(Text)  # 320px thumbnail
+
+    # Quality score (for auto-selection)
+    quality_score = Column(Float, default=0)  # Based on clarity, faces, action
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    candidate = relationship("Candidate", backref="thumbnails")

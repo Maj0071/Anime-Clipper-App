@@ -13,6 +13,7 @@ from app.models import Base
 from app.api import auth, jobs
 from app.api import vidoes as videos
 from app.api import renderer as renders
+from app.api import templates, music, thumbnails
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -37,6 +38,11 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(videos.router, prefix="/videos", tags=["videos"])
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(renders.router, prefix="/renders", tags=["renders"])
+
+# LOW PRIORITY: Template Marketplace, Music Library, Thumbnails
+app.include_router(templates.router, prefix="/templates", tags=["templates"])
+app.include_router(music.router, prefix="/music", tags=["music"])
+app.include_router(thumbnails.router, prefix="/thumbnails", tags=["thumbnails"])
 
 # Serve thumbnail and render files from /tmp/videos
 _thumb_dir = "/tmp/videos"

@@ -424,3 +424,137 @@ async def retry_job(
         "status": "pending",
         "message": "Job retried"
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  VIRALITY SCORING API
+# ══════════════════════════════════════════════════════════════════════
+
+class ViralityScoreRequest(BaseModel):
+    candidate_ids: List[str]
+
+
+class ViralityScoreResponse(BaseModel):
+    candidate_id: str
+    score: int
+    grade: str
+    factors: Dict
+    recommendations: List[str]
+    best_hook_time: float
+    peak_action_time: float
+
+
+@router.post("/virality-score", response_model=List[ViralityScoreResponse])
+async def get_virality_scores(
+    request: ViralityScoreRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get virality scores for candidate clips.
+
+    Analyzes clips for viral potential based on:
+    - Action density (30%)
+    - Audio energy (20%)
+    - Hook strength (20%)
+    - Face presence (15%)
+    - Color vibrancy (15%)
+
+    Returns 0-100 score with S/A/B/C/D grade and recommendations.
+    """
+    from app.models import Candidate
+    from app.services.virality_scorer import ViralityScorer
+    import glob as glob_mod
+    import os
+
+    results = []
+
+    for cand_id in request.candidate_ids:
+        candidate = db.query(Candidate).filter(Candidate.id == cand_id).first()
+        if not candidate:
+            continue
+
+        # Verify user owns the video
+        video = db.query(Video).filter(
+            Video.id == candidate.video_id,
+            Video.user_id == current_user.id
+        ).first()
+
+        if not video:
+            continue
+
+        # Resolve video path
+        video_path = None
+        if video.src_url.startswith("file://"):
+            local_src = video.src_url.replace("file://", "")
+            if os.path.isfile(local_src):
+                video_path = local_src
+            else:
+                matches = glob_mod.glob(f"/tmp/videos/{video.id}.*")
+                if matches:
+                    video_path = matches[0]
+        else:
+            video_path = f"/tmp/videos/{video.id}.mp4"
+
+        if not video_path or not os.path.exists(video_path):
+            results.append({
+                'candidate_id': cand_id,
+                'score': 50,
+                'grade': 'C',
+                'factors': {},
+                'recommendations': ['Could not analyze - video file not found'],
+                'best_hook_time': candidate.start_s,
+                'peak_action_time': candidate.start_s,
+            })
+            continue
+
+        try:
+            scorer = ViralityScorer(video_path)
+            score_result = scorer.calculate_score(candidate.start_s, candidate.end_s)
+
+            results.append({
+                'candidate_id': cand_id,
+                'score': score_result.score,
+                'grade': score_result.grade,
+                'factors': score_result.factors.to_dict(),
+                'recommendations': score_result.recommendations,
+                'best_hook_time': score_result.best_hook_time,
+                'peak_action_time': score_result.peak_action_time,
+            })
+        except Exception as e:
+            logger.error(f"Virality scoring failed for {cand_id}: {e}")
+            results.append({
+                'candidate_id': cand_id,
+                'score': 50,
+                'grade': 'C',
+                'factors': {},
+                'recommendations': [f'Analysis error: {str(e)[:100]}'],
+                'best_hook_time': candidate.start_s,
+                'peak_action_time': candidate.start_s,
+            })
+
+    return results
+
+
+@router.get("/virality-score/{candidate_id}", response_model=ViralityScoreResponse)
+async def get_single_virality_score(
+    candidate_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get virality score for a single candidate clip.
+    """
+    results = await get_virality_scores(
+        ViralityScoreRequest(candidate_ids=[candidate_id]),
+        current_user,
+        db
+    )
+
+    if not results:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found"
+        )
+
+    return results[0]

@@ -231,7 +231,7 @@ async def create_auto_edit(
 
     Templates: anime_hype, clean_flow, hard_cuts, cinematic, glitch
     """
-    valid_templates = ['anime_hype', 'clean_flow', 'hard_cuts', 'cinematic', 'glitch']
+    valid_templates = ['viral_anime', 'anime_hype', 'clean_flow', 'hard_cuts', 'cinematic', 'glitch']
     if request.auto_edit_template not in valid_templates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

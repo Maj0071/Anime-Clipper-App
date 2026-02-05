@@ -228,7 +228,11 @@ class TemplateRenderer:
             return self._build_impact_captions(captions, safe_y, width, video_start)
         elif template == 'karaoke':
             return self._build_karaoke_captions(captions, safe_y, width, video_start)
-        
+        elif template == 'viral':
+            return self._build_viral_captions(captions, safe_y, width, video_start)
+        elif template == 'popup':
+            return self._build_word_popup_captions(captions, safe_y, width, video_start)
+
         return ''
     
     def _build_clean_captions(self, captions: List[Dict], y: int, width: int, start: float) -> str:
@@ -308,11 +312,11 @@ class TemplateRenderer:
     def _build_karaoke_captions(self, captions: List[Dict], y: int, width: int, start: float) -> str:
         """Karaoke style with progressive word highlight"""
         filters = []
-        
+
         # Build full text line
         full_text = ' '.join(cap['word'] for cap in captions)
         full_text = full_text.replace("'", "\\'").replace(":", "\\:")
-        
+
         # Base text (unhighlighted)
         base_filter = (
             f"drawtext=text='{full_text}':"
@@ -323,13 +327,13 @@ class TemplateRenderer:
             f"shadowcolor=black@0.5:shadowx=2:shadowy=2"
         )
         filters.append(base_filter)
-        
+
         # Highlighted words (overlay)
         for cap in captions:
             enable_start = cap['start'] - start
             enable_end = cap['end'] - start
             text = cap['word'].replace("'", "\\'").replace(":", "\\:")
-            
+
             highlight_filter = (
                 f"drawtext=text='{text}':"
                 f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
@@ -340,7 +344,164 @@ class TemplateRenderer:
                 f"enable='between(t,{enable_start},{enable_end})'"
             )
             filters.append(highlight_filter)
-        
+
+        return ','.join(filters)
+
+    def _build_shaky_caption(self, text: str, start: float, end: float,
+                              y: int, intensity: int = 4) -> str:
+        """
+        Shaky/trembling text effect for emphasis.
+        Text vibrates using animated x/y positions with sin/cos.
+        """
+        escaped = self._escape_text(text)
+
+        # High frequency sin/cos creates shake vibration
+        # n = frame number, creates rapid oscillation
+        shake_x = f"(w-text_w)/2 + {intensity}*sin(n*2.5)*cos(n*1.7)"
+        shake_y = f"{y} + {intensity}*sin(n*3.1)*cos(n*0.9)"
+
+        return (
+            f"drawtext=text='{escaped}':"
+            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+            f"fontsize=52:fontcolor=white:"
+            f"borderw=4:bordercolor=black:"
+            f"x='{shake_x}':y='{shake_y}':"
+            f"shadowcolor=black@0.8:shadowx=3:shadowy=3:"
+            f"enable='between(t,{start},{end})'"
+        )
+
+    def _build_word_popup_captions(self, captions: List[Dict], y: int,
+                                     width: int, start: float) -> str:
+        """
+        Word-by-word pop-up with bounce/scale animation.
+        Each word appears with a scale-up and bounce effect.
+        """
+        filters = []
+
+        for cap in captions:
+            word_start = cap['start'] - start
+            word_end = cap['end'] - start
+            text = cap['word'].replace("'", "\\'").replace(":", "\\:")
+
+            # Animation duration for pop effect
+            pop_dur = 0.12
+
+            # Fontsize expression: pops from 35 to 52 via sine curve
+            fontsize_expr = (
+                f"if(lt(t-{word_start},{pop_dur}),"
+                f"35+25*sin((t-{word_start})/{pop_dur}*PI/2),"
+                f"52)"
+            )
+
+            # Y position: bounces up 12px then settles
+            y_expr = (
+                f"if(lt(t-{word_start},{pop_dur}),"
+                f"{y}-12*sin((t-{word_start})/{pop_dur}*PI),"
+                f"{y})"
+            )
+
+            filter_part = (
+                f"drawtext=text='{text}':"
+                f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                f"fontsize='{fontsize_expr}':fontcolor=white:"
+                f"borderw=4:bordercolor=black:"
+                f"x=(w-text_w)/2:y='{y_expr}':"
+                f"shadowcolor=black@0.7:shadowx=3:shadowy=3:"
+                f"enable='between(t,{word_start},{word_end})'"
+            )
+            filters.append(filter_part)
+
+        return ','.join(filters)
+
+    def _build_gradient_caption(self, text: str, start: float, end: float, y: int) -> str:
+        """
+        Gradient effect via stacked colored text layers.
+        Creates purple-to-cyan gradient look.
+        """
+        escaped = self._escape_text(text)
+
+        # Stack multiple layers with offset colors for gradient effect
+        layers = [
+            # Bottom layer (purple/magenta)
+            f"drawtext=text='{escaped}':"
+            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+            f"fontsize=52:fontcolor=#FF00FF:"
+            f"borderw=5:bordercolor=black:"
+            f"x=(w-text_w)/2:y={y+2}:"
+            f"enable='between(t,{start},{end})'",
+            # Top layer (cyan with transparency)
+            f"drawtext=text='{escaped}':"
+            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+            f"fontsize=52:fontcolor=#00FFFF@0.6:"
+            f"x=(w-text_w)/2:y={y}:"
+            f"enable='between(t,{start},{end})'"
+        ]
+
+        return ','.join(layers)
+
+    def _build_viral_captions(self, captions: List[Dict], y: int,
+                                width: int, start: float) -> str:
+        """
+        Viral anime caption style combining:
+        - Word-by-word pop-up animation
+        - Shake on emphasized words (caps, exclamation)
+        - Gradient colors on keywords
+        """
+        filters = []
+
+        for i, cap in enumerate(captions):
+            word_start = cap['start'] - start
+            word_end = cap['end'] - start
+            text = cap['word'].replace("'", "\\'").replace(":", "\\:")
+            word = cap['word']
+
+            # Detect emphasis (all caps, exclamation, question)
+            is_emphasized = word.isupper() or word.endswith('!') or word.endswith('?')
+
+            # Animation parameters
+            pop_dur = 0.1
+
+            if is_emphasized:
+                # Emphasized: shaky + larger + red color
+                shake_x = f"(w-text_w)/2 + 5*sin(n*3)*cos(n*2)"
+                shake_y = f"{y} + 5*sin(n*4)*cos(n*1.5)"
+                fontsize = 60
+                fontcolor = '#FF4444'
+
+                filter_part = (
+                    f"drawtext=text='{text}':"
+                    f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                    f"fontsize={fontsize}:fontcolor={fontcolor}:"
+                    f"borderw=5:bordercolor=black:"
+                    f"x='{shake_x}':y='{shake_y}':"
+                    f"shadowcolor=black@0.9:shadowx=4:shadowy=4:"
+                    f"enable='between(t,{word_start},{word_end})'"
+                )
+            else:
+                # Normal: pop-up with bounce
+                fontsize_expr = (
+                    f"if(lt(t-{word_start},{pop_dur}),"
+                    f"35+22*sin((t-{word_start})/{pop_dur}*PI/2),"
+                    f"52)"
+                )
+                y_expr = (
+                    f"if(lt(t-{word_start},{pop_dur}),"
+                    f"{y}-10*sin((t-{word_start})/{pop_dur}*PI),"
+                    f"{y})"
+                )
+
+                filter_part = (
+                    f"drawtext=text='{text}':"
+                    f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                    f"fontsize='{fontsize_expr}':fontcolor=white:"
+                    f"borderw=4:bordercolor=black:"
+                    f"x=(w-text_w)/2:y='{y_expr}':"
+                    f"shadowcolor=black@0.7:shadowx=3:shadowy=3:"
+                    f"enable='between(t,{word_start},{word_end})'"
+                )
+
+            filters.append(filter_part)
+
         return ','.join(filters)
     
     def render(

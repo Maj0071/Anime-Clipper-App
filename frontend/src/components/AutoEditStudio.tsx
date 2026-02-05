@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Sparkles, Loader2, Download, Zap, Film, Scissors, Clapperboard, MonitorPlay } from 'lucide-react';
+import { Sparkles, Loader2, Download, Zap, Film, Scissors, Clapperboard, MonitorPlay, Flame, Music, MessageSquare, Wand2, Target, Shuffle, Focus } from 'lucide-react';
 
 interface AutoEditStudioProps {
   selectedCandidateIds: string[];
@@ -18,7 +18,54 @@ interface Template {
   features: string[];
 }
 
+// Caption style options
+const CAPTION_STYLES = [
+  { id: 'pop', name: 'Pop', description: 'Scale up on each word' },
+  { id: 'bounce', name: 'Bounce', description: 'Vertical bounce animation' },
+  { id: 'highlight', name: 'Highlight', description: 'Color change on keywords' },
+  { id: 'glow', name: 'Glow', description: 'Neon glow effect' },
+];
+
+// Effect intensity options
+const EFFECT_INTENSITIES = [
+  { id: 'low', name: 'Subtle', description: 'Light effects' },
+  { id: 'medium', name: 'Balanced', description: 'Default intensity' },
+  { id: 'high', name: 'Maximum', description: 'Heavy effects' },
+];
+
+// Hook text templates
+const HOOK_TEMPLATES = [
+  { id: 'wait_for_it', text: 'Wait for it...' },
+  { id: 'insane', text: 'This scene is insane' },
+  { id: 'watch_end', text: 'Watch until the end' },
+  { id: 'hits_different', text: 'This hits different' },
+  { id: 'goosebumps', text: 'Gave me goosebumps' },
+  { id: 'peak_fiction', text: 'Peak fiction' },
+];
+
+// Hook text styles
+const HOOK_STYLES = [
+  { id: 'bold', name: 'Bold', description: 'Classic white text' },
+  { id: 'glitch', name: 'Glitch', description: 'Cyberpunk style' },
+  { id: 'neon', name: 'Neon', description: 'Glowing effect' },
+];
+
 const TEMPLATES: Template[] = [
+  {
+    id: 'viral_anime',
+    name: 'Viral Anime',
+    tagline: 'Maximum TikTok impact',
+    badge: 'NEW',
+    badgeColor: 'bg-pink-500',
+    icon: <Flame className="w-6 h-6" />,
+    features: [
+      'White flash on impacts',
+      'Dynamic screen shake',
+      'Zoom pulses on action',
+      'VHS scanlines + glitch',
+      'Beat sync support',
+    ],
+  },
   {
     id: 'anime_hype',
     name: 'Velocity',
@@ -28,9 +75,10 @@ const TEMPLATES: Template[] = [
     icon: <Zap className="w-6 h-6" />,
     features: [
       'Extreme speed ramps (0.3x/2.2x)',
+      'WHITE FLASH impacts (NEW)',
+      'Enhanced screen shake',
       'Hyper-saturated colors',
-      'White flash transitions',
-      'Bass-boosted impact audio',
+      'Beat-synced cuts',
     ],
   },
   {
@@ -42,7 +90,7 @@ const TEMPLATES: Template[] = [
     icon: <Film className="w-6 h-6" />,
     features: [
       'Dreamy warm color grade',
-      'Smooth dissolve transitions',
+      'Smooth flow transitions',
       'Gentle Ken Burns drift',
       'Deep vignette glow',
     ],
@@ -55,7 +103,7 @@ const TEMPLATES: Template[] = [
     badgeColor: 'bg-orange-500',
     icon: <Scissors className="w-6 h-6" />,
     features: [
-      'Instant hard cuts (0ms)',
+      'Whip pan transitions',
       'Near-monochrome dark look',
       'Extreme contrast + crush',
       'Cyan shadow tint',
@@ -100,6 +148,19 @@ export default function AutoEditStudio({ selectedCandidateIds, videoId }: AutoEd
   const [status, setStatus] = useState<string | null>(null);
   const [renderFiles, setRenderFiles] = useState<Record<string, Record<string, string>> | null>(null);
 
+  // NEW: Viral editing options
+  const [enableBeatSync, setEnableBeatSync] = useState(false);
+  const [captionText, setCaptionText] = useState('');
+  const [captionStyle, setCaptionStyle] = useState('pop');
+  const [effectIntensity, setEffectIntensity] = useState('medium');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // MEDIUM PRIORITY: Hook optimization
+  const [enableSmartReframe, setEnableSmartReframe] = useState(true);
+  const [hookText, setHookText] = useState('');
+  const [hookStyle, setHookStyle] = useState('bold');
+  const [reorderForHook, setReorderForHook] = useState(false);
+
   const toggleOutput = (r: string) => {
     setOutputs((prev) =>
       prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]
@@ -131,6 +192,16 @@ export default function AutoEditStudio({ selectedCandidateIds, videoId }: AutoEd
           outputs: outputs.length ? outputs : ['9:16'],
           max_duration: maxDuration,
           loudness: '-14',
+          // NEW: Viral editing options
+          enable_beat_sync: enableBeatSync,
+          caption_text: captionText.trim() || null,
+          caption_style: captionStyle,
+          effect_intensity: effectIntensity,
+          // MEDIUM PRIORITY: Hook optimization
+          enable_smart_reframe: enableSmartReframe,
+          hook_text: hookText.trim() || null,
+          hook_style: hookStyle,
+          reorder_for_hook: reorderForHook,
         }),
       });
       if (!res.ok) throw new Error('Failed to start auto-edit');
@@ -286,6 +357,213 @@ export default function AutoEditStudio({ selectedCandidateIds, videoId }: AutoEd
               <span>60s</span>
             </div>
           </div>
+
+          {/* Beat Sync Toggle - The #1 Viral Factor */}
+          <div className="pt-2 border-t border-gray-200">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={enableBeatSync}
+                  onChange={(e) => setEnableBeatSync(e.target.checked)}
+                  className="sr-only"
+                />
+                <div className={`w-11 h-6 rounded-full transition-colors ${enableBeatSync ? 'bg-orange-500' : 'bg-gray-300'}`}>
+                  <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${enableBeatSync ? 'translate-x-5' : ''}`} />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Music className="w-4 h-4 text-orange-500" />
+                <span className="text-sm font-medium text-gray-700">Beat Sync</span>
+                <span className="text-[10px] bg-red-500 text-white px-1.5 py-0.5 rounded-full font-bold">#1 VIRAL</span>
+              </div>
+            </label>
+            <p className="text-xs text-gray-500 mt-1 ml-14">Align cuts to music beats for maximum impact</p>
+          </div>
+
+          {/* Advanced Options Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-2 text-sm text-gray-600 hover:text-orange-600 transition-colors mt-2"
+          >
+            <Wand2 className="w-4 h-4" />
+            {showAdvanced ? 'Hide' : 'Show'} Advanced Options
+          </button>
+
+          {/* Advanced Options Panel */}
+          {showAdvanced && (
+            <div className="space-y-4 pt-3 border-t border-gray-200 mt-3">
+              {/* Caption Input */}
+              <div>
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                  <MessageSquare className="w-4 h-4" />
+                  Caption Text (optional)
+                </label>
+                <input
+                  type="text"
+                  value={captionText}
+                  onChange={(e) => setCaptionText(e.target.value)}
+                  placeholder="e.g., This scene is insane..."
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  maxLength={100}
+                />
+                <p className="text-xs text-gray-400 mt-1">Animated caption overlay on your clip</p>
+              </div>
+
+              {/* Caption Style */}
+              {captionText && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Caption Style:</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {CAPTION_STYLES.map((style) => (
+                      <button
+                        key={style.id}
+                        type="button"
+                        onClick={() => setCaptionStyle(style.id)}
+                        className={`px-3 py-2 rounded-lg border text-sm transition-all ${
+                          captionStyle === style.id
+                            ? 'border-orange-400 bg-orange-50 text-orange-700'
+                            : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="font-medium">{style.name}</div>
+                        <div className="text-[10px] text-gray-500">{style.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Effect Intensity */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Effect Intensity:</label>
+                <div className="flex gap-2">
+                  {EFFECT_INTENSITIES.map((intensity) => (
+                    <button
+                      key={intensity.id}
+                      type="button"
+                      onClick={() => setEffectIntensity(intensity.id)}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-all ${
+                        effectIntensity === intensity.id
+                          ? 'border-orange-400 bg-orange-50 text-orange-700'
+                          : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="font-medium">{intensity.name}</div>
+                      <div className="text-[10px] text-gray-500">{intensity.description}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Smart Reframing Toggle */}
+              <div className="pt-3 border-t border-gray-200">
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={enableSmartReframe}
+                      onChange={(e) => setEnableSmartReframe(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div className={`w-11 h-6 rounded-full transition-colors ${enableSmartReframe ? 'bg-blue-500' : 'bg-gray-300'}`}>
+                      <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${enableSmartReframe ? 'translate-x-5' : ''}`} />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Focus className="w-4 h-4 text-blue-500" />
+                    <span className="text-sm font-medium text-gray-700">Smart Reframe</span>
+                  </div>
+                </label>
+                <p className="text-xs text-gray-500 mt-1 ml-14">Keep characters centered when cropping</p>
+              </div>
+
+              {/* Hook Optimization Section */}
+              <div className="pt-3 border-t border-gray-200">
+                <div className="flex items-center gap-2 mb-3">
+                  <Target className="w-4 h-4 text-purple-500" />
+                  <span className="text-sm font-medium text-gray-700">Hook Optimization</span>
+                  <span className="text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded-full font-bold">RETENTION</span>
+                </div>
+
+                {/* Reorder for Hook Toggle */}
+                <label className="flex items-center gap-3 cursor-pointer mb-3">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={reorderForHook}
+                      onChange={(e) => setReorderForHook(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div className={`w-11 h-6 rounded-full transition-colors ${reorderForHook ? 'bg-purple-500' : 'bg-gray-300'}`}>
+                      <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${reorderForHook ? 'translate-x-5' : ''}`} />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Shuffle className="w-4 h-4 text-purple-500" />
+                    <span className="text-sm text-gray-700">Start with best moment</span>
+                  </div>
+                </label>
+
+                {/* Hook Text Input */}
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Hook Text (first 2-3s):</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={hookText}
+                      onChange={(e) => setHookText(e.target.value)}
+                      placeholder="e.g., Wait for it..."
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      maxLength={50}
+                    />
+                  </div>
+                </div>
+
+                {/* Hook Templates */}
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {HOOK_TEMPLATES.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => setHookText(template.text)}
+                      className={`px-2 py-1 text-xs rounded-full border transition-all ${
+                        hookText === template.text
+                          ? 'border-purple-400 bg-purple-50 text-purple-700'
+                          : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                      }`}
+                    >
+                      {template.text}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Hook Style (show only if hook text entered) */}
+                {hookText && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Hook Style:</label>
+                    <div className="flex gap-2">
+                      {HOOK_STYLES.map((style) => (
+                        <button
+                          key={style.id}
+                          type="button"
+                          onClick={() => setHookStyle(style.id)}
+                          className={`flex-1 px-2 py-1.5 rounded-lg border text-xs transition-all ${
+                            hookStyle === style.id
+                              ? 'border-purple-400 bg-purple-50 text-purple-700'
+                              : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                          }`}
+                        >
+                          <div className="font-medium">{style.name}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
