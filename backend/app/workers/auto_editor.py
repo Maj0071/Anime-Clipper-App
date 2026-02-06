@@ -443,38 +443,24 @@ class AutoEditRenderer:
         if not flash_times:
             return ""
 
-        # Build expression for multiple flash points
-        # Format: if(condition, flash_value, else_value)
-        # Flash fades from intensity to 0 over duration
+        # Use eq filter with enable for flash effects
+        # This is simpler and more reliable than geq with complex expressions
+        # Limit to 2 flashes to avoid filter complexity issues
+        flash_times = flash_times[:2]
 
-        flash_exprs = []
+        # Build enable expression for eq brightness boost
+        enable_parts = []
         for t in flash_times:
-            # Flash starts at t, ends at t+duration
-            # Brightness = intensity * (1 - (current_time - t) / duration)
-            flash_expr = (
-                f"if(between(t,{t:.3f},{t+duration:.3f}),"
-                f"{intensity}*(1-(t-{t:.3f})/{duration:.3f}),0)"
-            )
-            flash_exprs.append(flash_expr)
+            enable_parts.append(f"between(t,{t:.3f},{t+duration:.3f})")
 
-        # Combine all flashes with max() to handle overlaps
-        if len(flash_exprs) == 1:
-            brightness_expr = flash_exprs[0]
-        else:
-            # Chain max operations
-            brightness_expr = flash_exprs[0]
-            for expr in flash_exprs[1:]:
-                brightness_expr = f"max({brightness_expr},{expr})"
+        enable_expr = '+'.join(enable_parts)
 
-        # Apply as blend with white
-        # colorlevels or eq for brightness boost
-        # Using geq for precise control
-        return (
-            f"geq="
-            f"lum='clip(lum(X,Y)+255*({brightness_expr}),0,255)':"
-            f"cb='cb(X,Y)':"
-            f"cr='cr(X,Y)'"
-        )
+        # Calculate brightness boost (intensity 1.0 = add 0.5 to brightness)
+        brightness_boost = intensity * 0.5
+
+        # Use eq filter to boost brightness during flash moments
+        # The enable expression activates the filter only during flash times
+        return f"eq=brightness={brightness_boost}:enable='{enable_expr}'"
 
     def _white_flash_overlay_filter(self, flash_times: List[float],
                                      duration: float = 0.1) -> str:
@@ -525,31 +511,18 @@ class AutoEditRenderer:
         """
         pad_amount = peak_intensity + 10
 
-        if not motion_peaks:
-            # Constant shake without motion data
-            x_offset = f"{base_intensity}*sin(n*0.5)*cos(n*0.3)"
-            y_offset = f"{base_intensity}*sin(n*0.4)*cos(n*0.6)"
-        else:
-            # Build dynamic intensity based on proximity to peaks
-            # Higher motion score = more intense shake
-            intensity_exprs = []
-            for peak in motion_peaks:
-                t = peak['time']
-                strength = peak.get('motion', 0.8)
-                # Shake intensity spikes near peak, decays over duration
-                extra_shake = int((peak_intensity - base_intensity) * strength)
-                expr = f"if(between(t,{t-duration/2:.3f},{t+duration/2:.3f}),{extra_shake}*(1-abs(t-{t:.3f})/{duration/2:.3f}),0)"
-                intensity_exprs.append(expr)
+        # Calculate intensity based on motion peaks
+        # Use average motion to boost base intensity for high-action clips
+        avg_intensity = base_intensity
+        if motion_peaks:
+            avg_motion = sum(p.get('motion', 0.5) for p in motion_peaks) / len(motion_peaks)
+            # Boost intensity based on average motion (up to peak_intensity)
+            avg_intensity = int(base_intensity + (peak_intensity - base_intensity) * avg_motion)
 
-            if intensity_exprs:
-                # Sum all peak contributions
-                peak_sum = '+'.join(intensity_exprs)
-                dynamic_intensity = f"({base_intensity}+{peak_sum})"
-            else:
-                dynamic_intensity = str(base_intensity)
-
-            x_offset = f"({dynamic_intensity})*sin(n*0.5)*cos(n*0.3)"
-            y_offset = f"({dynamic_intensity})*sin(n*0.4)*cos(n*0.6)"
+        # Use frame-based shake (n = frame number) for smooth, constant energy
+        # This is simpler and more reliable than time-based expressions
+        x_offset = f"{avg_intensity}*sin(n*0.5)*cos(n*0.3)"
+        y_offset = f"{avg_intensity}*sin(n*0.4)*cos(n*0.6)"
 
         return (
             f"pad=w={w+pad_amount*2}:h={h+pad_amount*2}:x={pad_amount}:y={pad_amount}:color=black,"
@@ -1688,11 +1661,10 @@ class AutoEditRenderer:
                 'use_ramps': True,
             },
             'glitch': {
-                # GLITCH: Random speed stutters — erratic digital feel
-                'peak_speed': 0.5,
-                'normal_speed': 1.6,
-                'peak_window': 0.5,
-                'use_ramps': True,
+                # GLITCH: Visual chaos via filters, not speed changes
+                # Speed ramping with xfade creates too many segments
+                'normal_speed': 1.1,  # Slightly fast for energy
+                'use_ramps': False,   # Visual effects provide the glitch feel
             },
             'viral_anime': {
                 # VIRAL: Normal speed to preserve duration, visual effects only
