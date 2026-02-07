@@ -14,6 +14,7 @@ from app.api import auth, jobs
 from app.api import vidoes as videos
 from app.api import renderer as renders
 from app.api import templates, music, thumbnails
+from app.api import clip_finder, social
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -43,6 +44,10 @@ app.include_router(renders.router, prefix="/renders", tags=["renders"])
 app.include_router(templates.router, prefix="/templates", tags=["templates"])
 app.include_router(music.router, prefix="/music", tags=["music"])
 app.include_router(thumbnails.router, prefix="/thumbnails", tags=["thumbnails"])
+
+# Clip Finder & Social Media
+app.include_router(clip_finder.router, tags=["clips"])
+app.include_router(social.router, tags=["social"])
 
 # Serve thumbnail and render files from /tmp/videos
 _thumb_dir = "/tmp/videos"

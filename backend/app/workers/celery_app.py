@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 import os
 
 # Redis URL for broker and result backend
@@ -12,7 +13,8 @@ celery_app = Celery(
     include=[
         'app.workers.analyzer',
         'app.workers.renderer',
-        'app.workers.auto_editor'
+        'app.workers.auto_editor',
+        'app.workers.clip_tasks',
     ]
 )
 
@@ -66,6 +68,27 @@ celery_app.conf.broker_transport_options = {
     'priority_steps': list(range(10)),
     'sep': ':',
     'queue_order_strategy': 'priority'
+}
+
+# Celery Beat schedule for periodic tasks
+celery_app.conf.beat_schedule = {
+    'discover-clips-every-6h': {
+        'task': 'clip_tasks.discover_clips',
+        'schedule': crontab(minute=0, hour='*/6'),
+        'kwargs': {'max_per_source': 25},
+    },
+    'curate-daily-picks': {
+        'task': 'clip_tasks.curate_daily',
+        'schedule': crontab(minute=0, hour=8),  # 8 AM UTC
+    },
+    'publish-scheduled-posts': {
+        'task': 'clip_tasks.publish_scheduled_posts',
+        'schedule': 60.0,  # Every minute
+    },
+    'cleanup-expired-daily': {
+        'task': 'clip_tasks.cleanup_expired',
+        'schedule': crontab(minute=0, hour=3),  # 3 AM UTC
+    },
 }
 
 if __name__ == '__main__':

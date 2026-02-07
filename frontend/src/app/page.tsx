@@ -31,8 +31,11 @@ export default function HomePage() {
               <a href="#features" className="text-gray-600 hover:text-gray-900">
                 Features
               </a>
-              <a href="#how-it-works" className="text-gray-600 hover:text-gray-900">
-                How It Works
+              <a href="/discover" className="text-gray-600 hover:text-gray-900">
+                Discover
+              </a>
+              <a href="/social" className="text-gray-600 hover:text-gray-900">
+                Social
               </a>
               {process.env.NEXT_PUBLIC_LOCAL_MODE !== 'true' && (
                 <button className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">

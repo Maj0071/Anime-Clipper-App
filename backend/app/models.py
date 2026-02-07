@@ -231,3 +231,164 @@ class Thumbnail(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     candidate = relationship("Candidate", backref="thumbnails")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  CLIP FINDER: Discovery, Social Posting, Scheduling
+# ══════════════════════════════════════════════════════════════════════
+
+class ClipSource(Base):
+    """
+    Tracks source platforms for clip discovery (YouTube, Reddit, etc.)
+    """
+    __tablename__ = "clip_sources"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    platform = Column(String(50), nullable=False, index=True)  # 'youtube', 'reddit', 'twitter', 'tiktok', 'instagram'
+    name = Column(String(200), nullable=False)  # Display name for the source
+    url = Column(Text)  # Base URL or subreddit/channel URL
+    api_config = Column(JSON, default={})  # Platform-specific settings (search terms, filters)
+    priority = Column(Integer, default=5)  # 1-10, higher = searched first
+    is_active = Column(Integer, default=1)  # 0=disabled, 1=active
+    last_scraped = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    suggestions = relationship("ClipSuggestion", back_populates="source")
+
+
+class ClipSuggestion(Base):
+    """
+    Individual clip suggestions discovered from sources.
+    """
+    __tablename__ = "clip_suggestions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_id = Column(UUID(as_uuid=True), ForeignKey("clip_sources.id"), nullable=True, index=True)
+    external_id = Column(String(200), index=True)  # Platform-specific ID (video ID, post ID)
+
+    # Content info
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+    url = Column(Text, nullable=False)
+    thumbnail_url = Column(Text)
+
+    # Anime metadata
+    anime_name = Column(String(200), index=True)
+    episode_info = Column(String(100))  # "Episode 12" or "Movie"
+
+    # Video properties
+    duration = Column(Float)  # seconds
+    view_count = Column(Integer, default=0)
+
+    # Quality assessment
+    trending_score = Column(Float, default=0, index=True)  # 0-100, based on engagement
+    quality_score = Column(Float, default=0, index=True)  # 0-100, based on resolution/clarity
+    watermark_detected = Column(Integer, default=0)  # 0=no, 1=yes, 2=unknown
+
+    # Download tracking
+    is_downloaded = Column(Integer, default=0)  # 0=no, 1=yes
+    local_path = Column(Text)  # Path to downloaded file
+
+    # Timestamps
+    discovered_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True))  # When suggestion becomes stale
+
+    # Status
+    status = Column(String(50), default='active', index=True)  # 'active', 'dismissed', 'used', 'expired'
+
+    source = relationship("ClipSource", back_populates="suggestions")
+    interactions = relationship("UserClipInteraction", back_populates="suggestion")
+    daily_features = relationship("DailySuggestion", back_populates="suggestion")
+
+
+class UserClipInteraction(Base):
+    """
+    Track user interactions with clip suggestions for better recommendations.
+    """
+    __tablename__ = "user_clip_interactions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    suggestion_id = Column(UUID(as_uuid=True), ForeignKey("clip_suggestions.id"), nullable=False, index=True)
+    action = Column(String(50), nullable=False, index=True)  # 'liked', 'dismissed', 'downloaded', 'used'
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", backref="clip_interactions")
+    suggestion = relationship("ClipSuggestion", back_populates="interactions")
+
+
+class SocialAccount(Base):
+    """
+    OAuth tokens for connected social media accounts (TikTok, Instagram).
+    """
+    __tablename__ = "social_accounts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    platform = Column(String(50), nullable=False, index=True)  # 'tiktok', 'instagram'
+
+    # OAuth tokens
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text)
+    expires_at = Column(DateTime(timezone=True))
+
+    # Account info
+    account_name = Column(String(200))  # Display name / username
+    account_id = Column(String(200))  # Platform's user ID
+
+    is_active = Column(Integer, default=1)  # 0=disconnected, 1=active
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", backref="social_accounts")
+    scheduled_posts = relationship("ScheduledPost", back_populates="social_account")
+
+
+class ScheduledPost(Base):
+    """
+    Posts queued for publishing to social media platforms.
+    """
+    __tablename__ = "scheduled_posts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    social_account_id = Column(UUID(as_uuid=True), ForeignKey("social_accounts.id"), nullable=False, index=True)
+
+    # Content
+    video_path = Column(Text, nullable=False)  # Local path or URL to video
+    caption = Column(Text)
+    hashtags = Column(JSON, default=[])  # Array of hashtag strings
+
+    # Scheduling
+    scheduled_time = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # Status tracking
+    status = Column(String(50), default='pending', index=True)  # 'pending', 'posted', 'failed'
+    posted_at = Column(DateTime(timezone=True))
+    error_message = Column(Text)
+
+    # Platform response
+    post_id = Column(String(200))  # ID of the created post on the platform
+    post_url = Column(Text)  # URL to view the post
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", backref="scheduled_posts")
+    social_account = relationship("SocialAccount", back_populates="scheduled_posts")
+
+
+class DailySuggestion(Base):
+    """
+    Curated daily picks from clip suggestions.
+    """
+    __tablename__ = "daily_suggestions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)  # Date for this pick
+    suggestion_id = Column(UUID(as_uuid=True), ForeignKey("clip_suggestions.id"), nullable=False, index=True)
+    category = Column(String(50), nullable=False, index=True)  # 'trending', 'classic', 'underrated'
+    position = Column(Integer, default=0)  # Order within the day's picks
+    is_featured = Column(Integer, default=0)  # 0=no, 1=yes (highlight pick)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    suggestion = relationship("ClipSuggestion", back_populates="daily_features")
